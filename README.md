@@ -1,20 +1,20 @@
-# Iris Xe acceleration on macOS Tahoe — Lenovo IdeaPad Slim 5 14IRH10
+# Iris Xe acceleration on macOS Tahoe: Lenovo IdeaPad Slim 5 14IRH10
 
-Fork of [JulioNectar/Hackintosh-XPS13Plus-IrisXe-Tahoe](https://github.com/JulioNectar/Hackintosh-XPS13Plus-IrisXe-Tahoe)
-adapted for the **Lenovo IdeaPad Slim 5 14IRH10** (i5-13420H, UHD Graphics A7A8, 48 EU). The NootedGreen/Metal stack is
-upstream's; this fork replaces the Dell-specific EFI (ACPI, kexts, boot-args) and documents what is known and unknown
-for this laptop.
+This fork adapts [JulioNectar/Hackintosh-XPS13Plus-IrisXe-Tahoe](https://github.com/JulioNectar/Hackintosh-XPS13Plus-IrisXe-Tahoe)
+for the **Lenovo IdeaPad Slim 5 14IRH10** (i5-13420H, UHD Graphics A7A8, 48 EU). The NootedGreen/Metal stack comes from
+upstream. This fork replaces the Dell-specific EFI (ACPI, kexts, boot-args) and records what is known and unknown for
+this laptop.
 
-> ⚠️ **Experimental, and unproven on this exact GPU.** Upstream has confirmed the stack on Iris Xe 96 EU parts
+> ⚠️ **Experimental and unproven on this GPU.** Upstream has confirmed the stack on Iris Xe 96 EU parts
 > (A7A0/46A8) and on 80 EU parts with `ngreen-eu=80 ngreen-l3=6`. This laptop's UHD Graphics is **A7A8, 48 EU, 6 L3
-> banks**; the topology boot-args are set from the fuses, but nobody has booted macOS on this model yet. Keep a second
+> banks**; the topology boot-args come from the fuses, but nobody has booted macOS on this model yet. Keep a second
 > bootable USB and expect debugging. Read [docs/STATUS.md](docs/STATUS.md) before installing.
 
 ## This machine (probed from Linux)
 
 | Part | Model |
 |---|---|
-| CPU | Intel Core i5-13420H — 4 P-cores + 4 E-cores, 12 threads |
+| CPU | Intel Core i5-13420H (4 P-cores + 4 E-cores, 12 threads) |
 | GPU | Intel UHD Graphics (Alder Lake-P, `8086:A7A8`), 48 EU, 6 L3 banks |
 | Panel | 1920×1200 60 Hz (SDC ATNA40CT03-0), eDP, GPU PWM backlight |
 | Audio | Conexant CX8070 / SN6140 (HDA) |
@@ -27,39 +27,40 @@ for this laptop.
 ## What this fork changes
 
 - **ACPI.** Keeps `SSDT-EC`, `SSDT-MCHC`, `SSDT-PLUG-ALT`, `SSDT-PNLF`, `SSDT-SBUS`, `SSDT-USB-Reset`, `SSDT-USBX`,
-  `SSDT-XOSI` — all verified against this DSDT. Drops the Dell tables (`SSDT-ALS0`, `SSDT-GPI0`, `SSDT-RTCAWAC`,
-  `SSDT-XPS-I2C`) from the config; the files stay in the repo for upstream. Only the `_OSI` → `XOSI` patch remains
-  enabled, so `TPD0._CRS` returns `I2cSerialBusV2 + GpioInt(\_SB.GPI0)` and the touchpad can run on interrupts.
-- **GPU.** `ngreen-eu=48 ngreen-l3=6` from the fuse read (`0x9118 = 0x88`); `-ngreenpm` keeps the BIOS PL1 instead of
-  the XPS's 22 W cap. `ngreenblmax=17777` is removed: it is an XPS-panel value and this panel reports a different PWM
-  period (400 on Linux). Everything else in the NootedGreen boot-args is upstream's tested set.
-- **Audio.** AppleALC 1.9.8 with layout **15** (`alcid=15`; fallback 21). The codec is a Conexant **SN6140**
-  (`0x14F11F87`), but AppleALC 1.9.8 only lists the CX8070 (`0x14F11F86`), so the layout may not be selected; if
-  there is no sound, the fallback is a patched AppleALC or VoodooHDA. The XPS's AudShim/XeSpeakers SoundWire stack
-  does not apply to this HDA codec.
-- **Kexts.** `SMCDellSensors` entry removed (file kept, XPS-only). USB stays on default enumeration
-  (`USBToolBox.kext` + `UTBDefault.kext`); a real map is deferred until Windows. `XHCI-unsupported` stays because it
-  matches the PCH XHCI (`0x51ed8086`); it does not cover the Thunderbolt XHCI (`0xa71e8086`), so USB-C USB3 may be
-  missing until a USB map is made.
-- **Drivers.** `OpenHfsPlus.efi` enabled (open-source HFS+ driver bundled with OpenCore, no Apple binary needed).
-- **SMBIOS.** MacBookPro16,2 stays (Tahoe-supported; board-id `Mac-5F9802EFE386AA28`). Serials are generated locally
-  by `make-efi-linux.py` and written only to `dist/` (gitignored).
+  `SSDT-XOSI`. The first five target devices in this DSDT; the other three are generic. Drops the Dell tables (`SSDT-ALS0`,
+  `SSDT-GPI0`, `SSDT-RTCAWAC`, `SSDT-XPS-I2C`) from the config; the files stay in the repo for upstream. Only the
+  `_OSI` → `XOSI` patch remains enabled, so `TPD0._CRS` returns `I2cSerialBusV2 + GpioInt(\_SB.GPI0)` and the touchpad
+  can run on interrupts.
+- **GPU.** Sets `ngreen-eu=48 ngreen-l3=6` from the fuse read (`0x9118 = 0x88`). `-ngreenpm` keeps the BIOS PL1 instead
+  of the XPS's 22 W cap. Drops `ngreenblmax=17777`: it is an XPS-panel value and this panel reports a different PWM
+  period (400 on Linux). The rest of the NootedGreen boot-args come from upstream's tested set.
+- **Audio.** Adds AppleALC 1.9.8 with layout **15** (`alcid=15`; fallback 21). The codec is a Conexant **SN6140**
+  (`0x14F11F87`), but AppleALC 1.9.8 only lists the CX8070 (`0x14F11F86`), so the layout may not load; if there is no
+  sound, try a patched AppleALC or VoodooHDA. The XPS's AudShim/XeSpeakers SoundWire stack does not apply to this HDA
+  codec.
+- **Kexts.** Removes the `SMCDellSensors` entry (file kept, XPS-only). USB uses default enumeration
+  (`USBToolBox.kext` + `UTBDefault.kext`); map the ports on Windows later. `XHCI-unsupported` stays because it matches
+  the PCH XHCI (`0x51ed8086`); it does not cover the Thunderbolt XHCI (`0xa71e8086`), so USB-C USB3 may be missing
+  until you map the ports.
+- **Drivers.** Enables `OpenHfsPlus.efi` (open-source HFS+ driver bundled with OpenCore, no Apple binary needed).
+- **SMBIOS.** MacBookPro16,2 stays (Tahoe-supported; board-id `Mac-5F9802EFE386AA28`). `make-efi-linux.py` generates
+  serials locally and writes them only to `dist/` (gitignored).
 
 ## Expected status
 
 | Area | Expectation |
 |---|---|
-| Installer (no acceleration) | should boot on the firmware framebuffer; wired network needed (see below) |
+| Installer (no acceleration) | should boot on the firmware framebuffer; the install needs a wired network (see below) |
 | Metal desktop | unproven on A7A8: upstream issue [#8](https://github.com/JulioNectar/Hackintosh-XPS13Plus-IrisXe-Tahoe/issues/8) (HDMI `probePortState` panic) and [#17](https://github.com/JulioNectar/Hackintosh-XPS13Plus-IrisXe-Tahoe/issues/17) (eDP VBL timeout) |
 | Internal panel / brightness | `SSDT-PNLF` targets `\_SB.PC00.GFX0`; 60 Hz may avoid the VBL timeout; untested |
-| Audio | AppleALC layout 15, fallback 21; codec ID mismatch may prevent it loading |
+| Audio | AppleALC layout 15, fallback 21; codec ID mismatch may stop it loading |
 | Touchpad / keyboard | VoodooI2C + VoodooI2CHID; keyboard on VoodooPS2 |
 | Wi-Fi / Bluetooth | AirportItlwm after install; IntelBluetoothFirmware |
 | Battery / NVMe | SMCBatteryManager, NVMeFix |
 | Camera | UVC, should work with the built-in driver |
 | Sleep | likely broken (Modern Standby only; use display sleep) |
 | HDMI | untested and risky on A7A8 |
-| Fingerprint / haptics / touchscreen | XPS-only tools; this model's hardware is not adapted |
+| Fingerprint / haptics / touchscreen | XPS-only tools; this fork does not adapt them |
 
 ## Build the EFI (Linux)
 
@@ -114,8 +115,8 @@ system_profiler SPDisplaysDataType | grep -i metal
 ioreg -rc IntelAccelerator -d1 | grep xe-topo    # expect 48 EU, 6 L3
 ```
 
-`install.sh` checks for macOS 26.7.1 build **25G241**. A newer recovery build only produces a warning, but the
-NootedGreen byte patches (especially `-ngreenpm`) were verified on 25G241; if the boot hangs, use the install config
+`install.sh` checks for macOS 26.7.1 build **25G241**. A newer recovery build only produces a warning, but upstream
+verified the NootedGreen byte patches (especially `-ngreenpm`) on 25G241; if the boot hangs, use the install config
 and remove `-ngreenpm` first.
 
 After switching from `itlwm` to `AirportItlwm`, remove the old Ethernet service in System Settings › Network and add
@@ -125,8 +126,8 @@ Wi-Fi, so `en0` is the built-in Wi-Fi port (iMessage/FaceTime expect that).
 
 | Tool | Why it does not apply |
 |---|---|
-| `tools/AudShim`, `tools/XeSpeakers`, `tools/audio/` | XPS uses SoundWire + RT1316 amps; this laptop's CX8070 is driven by AppleALC |
-| `tools/fingerprint/` | XPS Goodix 27C6:63BC; this model's reader (if fitted) is not adapted |
+| `tools/AudShim`, `tools/XeSpeakers`, `tools/audio/` | XPS uses SoundWire + RT1316 amps; this laptop has an HDA codec (SN6140) and no SoundWire path |
+| `tools/fingerprint/` | XPS Goodix 27C6:63BC; this model's reader (if fitted) has no driver here |
 | `tools/xe-haptic`, `tools/xe-hapticbar` | XPS haptic touchpad; not applicable |
 | `tools/xe-toque` | XPS touchscreen; this model has no touchscreen (check your SKU) |
 | `tools/xe-pblock`, `tools/sleep/` | XPS power/lid behaviour; untested here and sleep is likely broken anyway |
@@ -140,7 +141,7 @@ The deep technical docs still describe the XPS 13 Plus and the shared NootedGree
 [INSTALL](docs/INSTALL.md) · [STATUS](docs/STATUS.md) · [KERNEL-PATCHES](docs/KERNEL-PATCHES.md) ·
 [METAL](docs/METAL.md) · [DEBUGGING](docs/DEBUGGING.md) · [HISTORY](docs/HISTORY.md) ·
 [EXPERIMENTS](docs/EXPERIMENTS.md) · [CATALOG](docs/CATALOG.md).
-`README.pt-BR.md` is the upstream Portuguese README; it is not machine-adapted.
+`README.pt-BR.md` comes from upstream and does not cover this laptop.
 
 ## Credits and license
 

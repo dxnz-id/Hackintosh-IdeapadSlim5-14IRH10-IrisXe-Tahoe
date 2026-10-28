@@ -2,14 +2,14 @@
 
 > **This fork: Lenovo IdeaPad Slim 5 14IRH10.** The short path is in the [README](../README.md): run
 > `python3 make-efi-linux.py`, make the recovery USB with `macrecovery`, then `zsh install.sh` after installing macOS.
-> The rest of this file is the upstream Dell XPS 13 Plus guide, kept as the manual reference; its Dell audio,
+> The rest of this file is the upstream Dell XPS 13 Plus guide, which serves as the manual reference; its Dell audio,
 > fingerprint, haptic and touchscreen sections do not apply to this laptop.
 
 ## IdeaPad Slim 5 14IRH10 (this fork)
 
-Target: **i5-13420H, UHD Graphics `8086:A7A8` (48 EU, 6 L3 banks), 1920×1200 eDP, CX8070 audio, AX210**, macOS Tahoe
-26.7.1. The EFI is already adapted: `ngreen-eu=48 ngreen-l3=6`, `-ngreenpm`, `alcid=15`, AppleALC, OpenHfsPlus, no
-Dell ACPI tables, default USB enumeration.
+Target: **i5-13420H, UHD Graphics `8086:A7A8` (48 EU, 6 L3 banks), 1920×1200 eDP, SN6140 audio, AX210**, macOS Tahoe
+26.7.1. The EFI already targets this machine: `ngreen-eu=48 ngreen-l3=6`, `-ngreenpm`, `alcid=15`, AppleALC,
+OpenHfsPlus, no Dell ACPI tables, default USB enumeration.
 
 1. **EFI.** `python3 make-efi-linux.py` → `dist/EFI` with your own MacBookPro16,2 serials. Copy it to a FAT32 ESP.
 2. **USB installer (no Mac).** Use OpenCore's `macrecovery.py`:
@@ -25,16 +25,17 @@ Dell ACPI tables, default USB enumeration.
    Check `ioreg -rc IntelAccelerator -d1 | grep xe-topo` (expect 48 EU / 6 L3) and `system_profiler SPDisplaysDataType`.
 6. **If the accelerated config hangs.** Boot `config-install.plist` (NootedGreen off) and remove `-ngreenpm` first.
    A7A8 acceleration is unproven; see [STATUS](STATUS.md).
-7. **Audio.** Layout 15 (`alcid=15`, fallback 21) is set, but the SN6140 codec ID (`0x14F11F87`) is not in AppleALC
-   1.9.8 (only CX8070 `0x14F11F86`), so there may be no sound. The fallback is a patched AppleALC or VoodooHDA.
+7. **Audio.** The EFI sets layout 15 (`alcid=15`, fallback 21), but the SN6140 codec ID (`0x14F11F87`) is not in
+   AppleALC 1.9.8 (only CX8070 `0x14F11F86`), so there may be no sound. If there is no sound, try a patched AppleALC
+   or VoodooHDA.
 
-USB is on **default enumeration** until a map is made on Windows (`USBToolBox.kext` + `UTBDefault.kext`). The DSDT
-already exposes `TPD0` with `I2cSerialBusV2 + GpioInt` once the `_OSI` → `XOSI` patch sets `OSYS`, so the Dell
-`SSDT-XPS-I2C`, `SSDT-GPI0`, `SSDT-ALS0` and `SSDT-RTCAWAC` are not loaded.
+USB uses **default enumeration** until you map the ports on Windows (`USBToolBox.kext` + `UTBDefault.kext`). The DSDT
+already exposes `TPD0` with `I2cSerialBusV2 + GpioInt` once the `_OSI` → `XOSI` patch sets `OSYS`, so this fork does
+not load the Dell `SSDT-XPS-I2C`, `SSDT-GPI0`, `SSDT-ALS0` and `SSDT-RTCAWAC`.
 
 ---
 
-# Upstream guide — Dell XPS 13 Plus 9320
+# Upstream guide: Dell XPS 13 Plus 9320
 
 Target: Dell XPS 13 Plus 9320, i7-1360P, Iris Xe 8086:A7A0, **macOS Tahoe 26.7.1 (25G241)**. Other Raptor Lake /
 Alder Lake laptops may work with their own EFI, but the patches were only tested here. NootedGreen describes
