@@ -1,4 +1,36 @@
-# Status (October 2026, macOS Tahoe 26.7.1 25G241)
+# Status — Lenovo IdeaPad Slim 5 14IRH10 (this fork)
+
+**No macOS boot has been attempted on this machine yet.** The table separates facts verified from Linux/ACPI from
+upstream behaviour that is expected to carry over. A7A8 acceleration is unproven: upstream issue
+[#8](https://github.com/JulioNectar/Hackintosh-XPS13Plus-IrisXe-Tahoe/issues/8) reports an HDMI `probePortState` panic
+and [#17](https://github.com/JulioNectar/Hackintosh-XPS13Plus-IrisXe-Tahoe/issues/17) an eDP VBL timeout.
+
+| Area | Status | Notes |
+|---|---|---|
+| EFI / ACPI | ✅ verified from Linux | `SSDT-EC`, `SSDT-MCHC`, `SSDT-PLUG-ALT`, `SSDT-PNLF`, `SSDT-SBUS` targets match this DSDT; 64 PR devices match 64 fake processors; only `_OSI` → `XOSI` enabled |
+| GPU topology | ✅ fuse-confirmed | `8086:A7A8`, 48 EU, 6 L3 banks (`0x9118 = 0x88`); boot-args `ngreen-eu=48 ngreen-l3=6` |
+| Touchpad | ✅ ACPI path verified | `TPD0._CRS` returns `I2cSerialBusV2 + GpioInt(\_SB.GPI0)` when `OSYS >= 0x07DC`; XOSI makes that true under Darwin |
+| Backlight | ✅ hardware path | GPU PWM (`intel_backlight` max 400); `SSDT-PNLF` added under `\_SB.PC00.GFX0`; `ngreenblmax` removed because the XPS value is panel-specific |
+| Audio | ⚠️ uncertain | codec is Conexant SN6140 (`0x14F11F87`); AppleALC 1.9.8 only lists CX8070 (`0x14F11F86`), so `alcid=15`/21 may not load. Needs a patched AppleALC or VoodooHDA |
+| Wi-Fi / Bluetooth | ⚠️ expected | AX210: AirportItlwm after install; IntelBluetoothFirmware |
+| Battery / NVMe | ⚠️ expected | SMCBatteryManager, NVMeFix |
+| Camera | ⚠️ expected | internal UVC; should bind with the built-in driver |
+| Metal desktop | ❓ unproven | 60 Hz panel may avoid the VBL timeout; keep the install config as fallback |
+| HDMI | ❓ untested / risky | A7A8 `probePortState` panic upstream (#8) |
+| Sleep | ❌ likely broken | Modern Standby only; use display sleep |
+| USB | ⚠️ default enumeration | PCH has 16 ports; macOS's 15-port limit drops `SS04` (port 16), which is unused. Map later on Windows; remove `UTBDefault.kext` and add `UTBMap.kext` |
+| Fingerprint / haptics / touchscreen | ❌ not adapted | XPS-only tools; this model's hardware differs or is absent |
+
+The installer config uses `itlwm.kext`, which needs HeliPort and has no UI in Recovery: **use wired Ethernet or iPhone
+USB tethering** for the install. The accelerated config's `AirportItlwm` is for the installed system.
+
+USB topology for the deferred map: PCH `00:14.0` (`8086:51ed`) — HS02=2, HS03=3, HS06=6 (camera), HS07=7 and HS08=8
+(USB-C USB2), HS10=10 (Bluetooth), SS02=14, SS03=15; SS04=16 unused. Thunderbolt `00:0d.0` (`8086:a71e`) — SS02=3,
+SS03=4 (USB-C USB3). USB-A type 3, USB-C type 9, internal camera/Bluetooth type 255.
+
+---
+
+# Upstream status — Dell XPS 13 Plus 9320 (October 2026, macOS Tahoe 26.7.1 25G241)
 
 ## Works
 

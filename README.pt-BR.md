@@ -1,3 +1,7 @@
+> **Nota:** este fork foi adaptado para o **Lenovo IdeaPad Slim 5 14IRH10**; a documentação específica está no
+> [README.md](README.md) (em inglês). O texto abaixo é o README original do XPS 13 Plus e continua válido apenas para
+> a pilha NootedGreen/Metal compartilhada.
+
 # Aceleração da Iris Xe no macOS Tahoe — Dell XPS 13 Plus (9320)
 
 Aceleração gráfica de verdade (**Metal, Core Animation, Liquid Glass**) para a **Intel Iris Xe do i7-1360P (Raptor Lake-P, 8086:A7A0)** no **macOS Tahoe 26.7.1**, num hackintosh com OpenCore.

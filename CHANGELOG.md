@@ -1,8 +1,24 @@
 # Changelog
 
-Every change is tested on the real XPS 13 Plus 9320 before it is marked **confirmed**. Status values:
+Every upstream change is tested on the XPS 13 Plus 9320 before it is marked **confirmed**. Status values:
 **confirmed** (works on hardware), **testing** (built and installed, being evaluated), **reverted**, **superseded** (replaced by a later entry).
 The full story behind each item is in [docs/HISTORY.md](docs/HISTORY.md).
+
+## Fork — Lenovo IdeaPad Slim 5 14IRH10 (2026-10-28)
+
+EFI and docs adapted for the IdeaPad Slim 5 14IRH10 (i5-13420H, UHD A7A8 48 EU). **No macOS boot on this model yet.**
+The NootedGreen/Metal stack is unchanged upstream code; only machine-specific EFI choices were replaced.
+
+| Change | Status |
+|---|---|
+| ACPI: dropped Dell `SSDT-ALS0`, `SSDT-GPI0`, `SSDT-RTCAWAC`, `SSDT-XPS-I2C` from both configs; kept `SSDT-EC`, `SSDT-MCHC`, `SSDT-PLUG-ALT`, `SSDT-PNLF`, `SSDT-SBUS`, `SSDT-USB-Reset`, `SSDT-USBX`, `SSDT-XOSI`; only `_OSI` → `XOSI` patch remains enabled. All targets verified against this DSDT | adapted (not booted) |
+| GPU: `ngreen-eu=48 ngreen-l3=6` from the fuse read (`0x9118 = 0x88`); `-ngreenpm` replaces the XPS's `ngreenpm=22`; `ngreenblmax=17777` removed (XPS panel-specific) | adapted (not booted) |
+| Audio: AppleALC 1.9.8 added, layout 15 (`alcid=15`, fallback 21); the codec is SN6140 (`0x14F11F87`) and AppleALC only lists CX8070 (`0x14F11F86`), so audio may not load (patched AppleALC or VoodooHDA is the fallback); `SMCDellSensors` entry removed (XPS-only) | adapted (not booted) |
+| Drivers: `OpenHfsPlus.efi` enabled (open-source, from the OpenCore release) | adapted (not booted) |
+| `revcpuname` corrected to `13th Gen Intel(R) Core(TM) i5-13420H`; OpenCore audio device path corrected to `PciRoot(0x0)/Pci(0x1f,0x3)`; Dell `xh_Dell_` delete entry removed | adapted (not booted) |
+| USB: default enumeration (`USBToolBox` + `UTBDefault`); real map deferred until Windows | adapted (not booted) |
+| `make-efi-linux.py`: builds `dist/EFI` with macserial.linux and unique SMBIOS, no macOS tools | tested on Linux |
+| Docs: README/INSTALL/STATUS rewritten for this laptop; XPS-only tools (AudShim, XeSpeakers, fingerprint, haptics, touchscreen) marked as not adapted | done |
 
 ## Unreleased
 
