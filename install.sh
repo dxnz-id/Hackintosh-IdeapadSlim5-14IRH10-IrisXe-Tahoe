@@ -76,7 +76,11 @@ step 1 "Checks"
 BUILD=$(sw_vers -buildVersion)
 if [[ $BUILD == $BUILD_REQ ]]; then ok "macOS $(sw_vers -productVersion) ($BUILD)"
 else warn "macOS build is $BUILD, the patches were made for $BUILD_REQ (Tahoe 26.7.1)."
-     [[ "$XE_FORCE" == 1 ]] || fail "refusing to continue (set XE_FORCE=1 to try anyway, at your own risk)"; fi
+     if [[ "$XE_FORCE" != 1 ]]; then
+       print -n "  Continue anyway? This may not work. [y/N] "
+       read -r REPLY
+       [[ $REPLY == [yY] ]] || fail "aborted (set XE_FORCE=1 to skip this prompt)"
+     fi; fi
 xcode-select -p >/dev/null 2>&1 && ok "Command Line Tools" || fail "install the Command Line Tools first: xcode-select --install"
 for t in git python3 clang codesign; do command -v $t >/dev/null || fail "missing tool: $t"; done
 # FAT/exFAT (USB sticks) keep macOS metadata in "._" files, which break the bundle copies and codesign

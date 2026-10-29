@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 """Build dist/EFI with unique SMBIOS data, from Linux.
 
-    python3 make-efi-linux.py   -> dist/EFI and dist/EFI-IdeaPad-Slim5-14IRH10.zip
+    python3 make-efi-linux.py            -> reuse saved SMBIOS, rebuild dist/EFI and zip
+    python3 make-efi-linux.py --new-smbios -> generate new serial/MLB/UUID/ROM, save and rebuild
 
 Every machine needs its own serial, MLB, UUID and ROM. This fills both config files:
   EFI/OC/config.plist          accelerated (NootedGreen on)
   EFI/OC/config-install.plist  for installing macOS (NootedGreen off, verbose)
 
+SMBIOS data is saved to dist/smbios.json on first run (or with --new-smbios).
+Keep dist/ private and never commit it.
+
 The macOS-only make-efi.sh uses ditto/plutil; this script uses only the Python standard library and
 macserial.linux from the matching OpenCore release.
 """
+import base64
+import json
 import plistlib
 import secrets
 import shutil
@@ -27,6 +33,7 @@ DIST = ROOT / "dist"
 OC_DIR = DEPS / f"OpenCore-{OC_VER}"
 MS = OC_DIR / "Utilities" / "macserial" / "macserial.linux"
 ZIP_NAME = "EFI-IdeaPad-Slim5-14IRH10.zip"
+SMBIOS_FILE = DIST / "smbios.json"
 
 
 def ensure_macserial() -> None:
@@ -60,11 +67,42 @@ def generate_smbios() -> tuple[str, str]:
     return serial, mlb
 
 
+def load_smbios() -> tuple[str, str, str, bytes] | None:
+    """Return (serial, mlb, system_uuid, rom) from saved file, or None if missing."""
+    if not SMBIOS_FILE.exists():
+        return None
+    data = json.loads(SMBIOS_FILE.read_text())
+    return data["serial"], data["mlb"], data["uuid"], base64.b64decode(data["rom"])
+
+
+def save_smbios(serial: str, mlb: str, system_uuid: str, rom: bytes) -> None:
+    DIST.mkdir(parents=True, exist_ok=True)
+    SMBIOS_FILE.write_text(json.dumps({
+        "serial": serial,
+        "mlb": mlb,
+        "uuid": system_uuid,
+        "rom": base64.b64encode(rom).decode(),
+    }, indent=2))
+
+
 def main() -> None:
+    new_smbios = "--new-smbios" in sys.argv
+
     ensure_macserial()
-    serial, mlb = generate_smbios()
-    system_uuid = str(uuid.uuid4()).upper()
-    rom = secrets.token_bytes(6)  # 6 random bytes; plist <data> is base64
+
+    saved = load_smbios()
+    if new_smbios or saved is None:
+        if saved is not None and not new_smbios:
+            pass  # unreachable; guarded above
+        serial, mlb = generate_smbios()
+        system_uuid = str(uuid.uuid4()).upper()
+        rom = secrets.token_bytes(6)  # 6 random bytes; plist <data> is base64
+        save_smbios(serial, mlb, system_uuid, rom)
+        if new_smbios:
+            print("Generated new SMBIOS data and saved to dist/smbios.json")
+    else:
+        serial, mlb, system_uuid, rom = saved
+        print("Reusing saved SMBIOS from dist/smbios.json")
 
     out_efi = DIST / "EFI"
     if out_efi.exists():
@@ -83,7 +121,8 @@ def main() -> None:
         generic["ROM"] = rom
         with open(cfg, "wb") as f:
             plistlib.dump(p, f, sort_keys=False)
-        plistlib.load(open(cfg, "rb"))  # sanity check
+        with open(cfg, "rb") as f:
+            plistlib.load(f)  # sanity check
 
     archive = DIST / ZIP_NAME
     archive.unlink(missing_ok=True)
@@ -95,12 +134,14 @@ EFI ready: {out_efi}  (zip: {archive})
   MLB:    {mlb}
   UUID:   {system_uuid}
 
-Keep these private: they are this machine's identity. Do not publish dist/.
+SMBIOS backup: {SMBIOS_FILE}
+Keep dist/ private: it contains this machine's identity. Do not publish it.
 
 Next steps:
   1. Copy dist/EFI to a FAT32 USB EFI partition.
   2. To INSTALL macOS: rename EFI/OC/config-install.plist to config.plist (keep the accelerated one).
   3. After installing: restore the accelerated config.plist and run install.sh from macOS.
+  4. To regenerate serial numbers (new machine): python3 make-efi-linux.py --new-smbios
 """)
 
 
