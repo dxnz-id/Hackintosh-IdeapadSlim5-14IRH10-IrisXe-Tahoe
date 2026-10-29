@@ -1132,7 +1132,7 @@
 				<key>Comment</key>
 				<string></string>
 				<key>Enabled</key>
-				<true/>
+				<false/>
 				<key>ExecutablePath</key>
 				<string>Contents/MacOS/WhateverGreen</string>
 				<key>MaxKernel</key>
@@ -1458,7 +1458,7 @@
 			<key>DisplayLevel</key>
 			<integer>2147483714</integer>
 			<key>LogModules</key>
-			<string>*</string>
+			<string>OCBP=-1</string>
 			<key>SysReport</key>
 			<false/>
 			<key>Target</key>

@@ -92,8 +92,6 @@ def main() -> None:
 
     saved = load_smbios()
     if new_smbios or saved is None:
-        if saved is not None and not new_smbios:
-            pass  # unreachable; guarded above
         serial, mlb = generate_smbios()
         system_uuid = str(uuid.uuid4()).upper()
         rom = secrets.token_bytes(6)  # 6 random bytes; plist <data> is base64

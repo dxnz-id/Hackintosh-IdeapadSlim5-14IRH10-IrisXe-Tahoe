@@ -20,13 +20,13 @@ TMP=$(mktemp -d)
 rm -rf $OUT; mkdir -p $OUT/Contents/MacOS
 python3 -I - "$SRC/Info.plist" "$OUT/Contents/Info.plist" <<EOF
 import plistlib, sys
-d = plistlib.load(open(sys.argv[1], "rb"))
+with open(sys.argv[1], "rb") as f: d = plistlib.load(f)
 sub = {"\$(EXECUTABLE_NAME)": "$NAME", "\$(PRODUCT_BUNDLE_IDENTIFIER)": "$BID",
        "\$(PRODUCT_NAME)": "$NAME", "\$(MODULE_VERSION)": "$VER", "\$(DEVELOPMENT_LANGUAGE)": "en"}
 for k, v in list(d.items()):
     if isinstance(v, str): d[k] = sub.get(v, v)
 d.pop("IOKitPersonalities", None)
-plistlib.dump(d, open(sys.argv[2], "wb"), fmt=plistlib.FMT_XML)
+with open(sys.argv[2], "wb") as f: plistlib.dump(d, f, fmt=plistlib.FMT_XML)
 EOF
 grep -q '\$(' $OUT/Contents/Info.plist && { echo "unresolved \$(...) in Info.plist"; exit 1; }
 
