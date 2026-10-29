@@ -1587,7 +1587,7 @@
 				AAAAAAAAAAAAAAAAAAA=
 				</data>
 				<key>boot-args</key>
-				<string>keepsyms=1 -vi2c-force-polling -v alcid=15</string>
+				<string>keepsyms=1 -vi2c-force-polling -v alcid=15 -igfxvesa</string>
 				<key>csr-active-config</key>
 				<data>
 				EwoAAA==
