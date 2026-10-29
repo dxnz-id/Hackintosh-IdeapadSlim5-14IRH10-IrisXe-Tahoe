@@ -9,7 +9,7 @@
 
 Target: **i5-13420H, UHD Graphics `8086:A7A8` (48 EU, 6 L3 banks), 1920×1200 eDP, SN6140 audio, AX210**, macOS Tahoe
 26.7.1. The EFI already targets this machine: `ngreen-eu=48 ngreen-l3=6`, `-ngreenpm`, `alcid=15`, AppleALC,
-OpenHfsPlus, no Dell ACPI tables, default USB enumeration.
+OpenHfsPlus, no Dell ACPI tables, USB map from Windows.
 
 1. **EFI.** `python3 make-efi-linux.py` → `dist/EFI` with your own MacBookPro16,2 serials. Copy it to a FAT32 ESP.
 2. **USB installer (no Mac).** Use OpenCore's `macrecovery.py`:
@@ -29,9 +29,9 @@ OpenHfsPlus, no Dell ACPI tables, default USB enumeration.
    AppleALC 1.9.8 (only CX8070 `0x14F11F86`), so there may be no sound. If there is no sound, try a patched AppleALC
    or VoodooHDA.
 
-USB uses **default enumeration** until you map the ports on Windows (`USBToolBox.kext` + `UTBDefault.kext`). The DSDT
-already exposes `TPD0` with `I2cSerialBusV2 + GpioInt` once the `_OSI` → `XOSI` patch sets `OSYS`, so this fork does
-not load the Dell `SSDT-XPS-I2C`, `SSDT-GPI0`, `SSDT-ALS0` and `SSDT-RTCAWAC`.
+USB uses the map from Windows (`USBToolBox.kext` + `UTBMap.kext`, 10 ports; see [hardware](hardware/README.md)). The
+DSDT already exposes `TPD0` with `I2cSerialBusV2 + GpioInt` once the `_OSI` → `XOSI` patch sets `OSYS`, so this fork
+does not load the Dell `SSDT-XPS-I2C`, `SSDT-GPI0`, `SSDT-ALS0` and `SSDT-RTCAWAC`.
 
 ---
 

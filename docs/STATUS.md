@@ -18,15 +18,16 @@ and [#17](https://github.com/JulioNectar/Hackintosh-XPS13Plus-IrisXe-Tahoe/issue
 | Metal desktop | ❓ unproven | 60 Hz panel may avoid the VBL timeout; keep the install config as fallback |
 | HDMI | ❓ untested / risky | A7A8 `probePortState` panic upstream (#8) |
 | Sleep | ❌ likely broken | Modern Standby only; use display sleep |
-| USB | ⚠️ default enumeration | PCH has 16 ports; macOS's 15-port limit drops `SS04` (port 16), which is unused. Map later on Windows; remove `UTBDefault.kext` and add `UTBMap.kext` |
+| USB | ⚠️ mapped, untested | `UTBMap.kext` covers 10 ports: both USB-A, both USB-C (USB2 on PCH, USB3 on TB), camera, Bluetooth. USB-C USB3 needs a TB XHCI driver; `0xa71e8086` is not in `XHCI-unsupported` |
 | Fingerprint / haptics / touchscreen | ❌ not adapted | XPS-only tools; this model's hardware differs or is absent |
 
 The installer config uses `itlwm.kext`, which needs HeliPort and has no UI in Recovery: **use wired Ethernet or iPhone
 USB tethering** for the install. The accelerated config's `AirportItlwm` is for the installed system.
 
-USB topology for the deferred map. PCH `00:14.0` (`8086:51ed`): HS02=2, HS03=3, HS06=6 (camera), HS07=7 and HS08=8
-(USB-C USB2), HS10=10 (Bluetooth), SS02=14, SS03=15; SS04=16 unused. Thunderbolt `00:0d.0` (`8086:a71e`): SS02=3,
-SS03=4 (USB-C USB3). USB-A type 3, USB-C type 9, internal camera/Bluetooth type 255.
+USB map (USBToolBox, see [hardware](hardware/README.md)): PCH `00:14.0` (`8086:51ed`) uses `HS01`=2 and `HS02`=3
+(USB-A), `HS03`=6 (camera), `HS04`=7 and `HS05`=8 (USB-C USB2), `HS06`=10 (Bluetooth), `SS01`=14 and `SS02`=15
+(USB-A 3.x); `SS04`=16 is unused. Thunderbolt `00:0d.0` (`8086:a71e`) uses `SS01`=3 and `SS02`=4 (USB-C 3.x).
+Connector types: USB-A 3, USB-C 9, internal 255.
 
 ---
 

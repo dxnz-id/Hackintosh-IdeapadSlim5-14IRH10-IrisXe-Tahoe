@@ -16,7 +16,7 @@ model yet.** The NootedGreen/Metal stack stays as upstream code; this fork repla
 | Audio: adds AppleALC 1.9.8, layout 15 (`alcid=15`, fallback 21); the codec is SN6140 (`0x14F11F87`) and AppleALC only lists CX8070 (`0x14F11F86`), so audio may not load (try a patched AppleALC or VoodooHDA); removes the `SMCDellSensors` entry (XPS-only) | adapted (not booted) |
 | Drivers: enables `OpenHfsPlus.efi` (open-source, from the OpenCore release) | adapted (not booted) |
 | Corrects `revcpuname` to `13th Gen Intel(R) Core(TM) i5-13420H` and the OpenCore audio device path to `PciRoot(0x0)/Pci(0x1f,0x3)`; removes the Dell `xh_Dell_` delete entry | adapted (not booted) |
-| USB: default enumeration (`USBToolBox` + `UTBDefault`); maps the ports on Windows later | adapted (not booted) |
+| USB: real map from USBToolBox (`UTBMap.kext`, 10 ports: both USB-A, both USB-C, camera, Bluetooth); removes `UTBDefault.kext`; raw map and OpCore-Simplify report in `docs/hardware/` | adapted (not booted) |
 | `make-efi-linux.py`: builds `dist/EFI` with macserial.linux and unique SMBIOS, no macOS tools | tested on Linux |
 | Docs: rewrites README/INSTALL/STATUS for this laptop; marks XPS-only tools (AudShim, XeSpeakers, fingerprint, haptics, touchscreen) as not adapted | done |
 

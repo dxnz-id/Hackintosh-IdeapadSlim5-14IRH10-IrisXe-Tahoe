@@ -10,7 +10,9 @@ this laptop.
 > banks**; the topology boot-args come from the fuses, but nobody has booted macOS on this model yet. Keep a second
 > bootable USB and expect debugging. Read [docs/STATUS.md](docs/STATUS.md) before installing.
 
-## This machine (probed from Linux)
+## This machine (Linux and Windows probes)
+
+Raw probes: [docs/hardware](docs/hardware/README.md).
 
 | Part | Model |
 |---|---|
@@ -38,10 +40,10 @@ this laptop.
   (`0x14F11F87`), but AppleALC 1.9.8 only lists the CX8070 (`0x14F11F86`), so the layout may not load; if there is no
   sound, try a patched AppleALC or VoodooHDA. The XPS's AudShim/XeSpeakers SoundWire stack does not apply to this HDA
   codec.
-- **Kexts.** Removes the `SMCDellSensors` entry (file kept, XPS-only). USB uses default enumeration
-  (`USBToolBox.kext` + `UTBDefault.kext`); map the ports on Windows later. `XHCI-unsupported` stays because it matches
-  the PCH XHCI (`0x51ed8086`); it does not cover the Thunderbolt XHCI (`0xa71e8086`), so USB-C USB3 may be missing
-  until you map the ports.
+- **Kexts.** Removes the `SMCDellSensors` entry (file kept, XPS-only). USB uses a real map from USBToolBox
+  (`USBToolBox.kext` + `UTBMap.kext`, 10 ports; see [docs/hardware](docs/hardware/README.md)). `XHCI-unsupported`
+  stays because it matches the PCH XHCI (`0x51ed8086`); it does not cover the Thunderbolt XHCI (`0xa71e8086`), so
+  USB-C USB3 may be missing until the TB controller gets a driver. USB-C USB2 works through the PCH.
 - **Drivers.** Enables `OpenHfsPlus.efi` (open-source HFS+ driver bundled with OpenCore, no Apple binary needed).
 - **SMBIOS.** MacBookPro16,2 stays (Tahoe-supported; board-id `Mac-5F9802EFE386AA28`). `make-efi-linux.py` generates
   serials locally and writes them only to `dist/` (gitignored).
@@ -60,6 +62,7 @@ this laptop.
 | Camera | UVC, should work with the built-in driver |
 | Sleep | likely broken (Modern Standby only; use display sleep) |
 | HDMI | untested and risky on A7A8 |
+| USB | USB-A and USB-C USB2 mapped; USB-C USB3 depends on the Thunderbolt XHCI driver |
 | Fingerprint / haptics / touchscreen | XPS-only tools; this fork does not adapt them |
 
 ## Build the EFI (Linux)
