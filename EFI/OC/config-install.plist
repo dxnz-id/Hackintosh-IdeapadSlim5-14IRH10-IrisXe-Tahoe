@@ -24,6 +24,14 @@
 			</dict>
 			<dict>
 				<key>Comment</key>
+				<string>SSDT-GPI0.aml</string>
+				<key>Enabled</key>
+				<true/>
+				<key>Path</key>
+				<string>SSDT-GPI0.aml</string>
+			</dict>
+			<dict>
+				<key>Comment</key>
 				<string>SSDT-MCHC.aml</string>
 				<key>Enabled</key>
 				<true/>
@@ -69,6 +77,14 @@
 				<true/>
 				<key>Path</key>
 				<string>SSDT-XOSI.aml</string>
+			</dict>
+			<dict>
+				<key>Comment</key>
+				<string>SSDT-RTCAWAC.aml</string>
+				<key>Enabled</key>
+				<true/>
+				<key>Path</key>
+				<string>SSDT-RTCAWAC.aml</string>
 			</dict>
 		</array>
 		<key>Delete</key>
@@ -85,7 +101,7 @@
 				<key>Count</key>
 				<integer>0</integer>
 				<key>Enabled</key>
-				<false/>
+				<true/>
 				<key>Find</key>
 				<data>
 				FF9TVEE=
@@ -123,7 +139,7 @@
 				<key>Count</key>
 				<integer>0</integer>
 				<key>Enabled</key>
-				<false/>
+				<true/>
 				<key>Find</key>
 				<data>
 				T1NJRA==
@@ -161,7 +177,7 @@
 				<key>Count</key>
 				<integer>0</integer>
 				<key>Enabled</key>
-				<false/>
+				<true/>
 				<key>Find</key>
 				<data>
 				UE5MRg==
@@ -635,13 +651,39 @@
 			<dict>
 				<key>AAPL,ig-platform-id</key>
 				<data>
-				8MgAAA==
+				AABJmg==
 				</data>
 				<key>AAPL,slot-name</key>
-				<string>Slot- 1</string>
+				<string>built-in</string>
+				<key>built-in</key>
+				<data>
+				AA==
+				</data>
+				<key>complete-modeset</key>
+				<data>
+				AQAAAA==
+				</data>
 				<key>device-id</key>
 				<data>
 				SZoAAA==
+				</data>
+				<key>enable-max-pixel-clock-override</key>
+				<data>
+				AQAAAA==
+				</data>
+				<key>force-online</key>
+				<data>
+				AQAAAA==
+				</data>
+				<key>framebuffer-patch-enable</key>
+				<data>
+				AQAAAA==
+				</data>
+				<key>hda-gfx</key>
+				<string>onboard-1</string>
+				<key>rps-control</key>
+				<data>
+				AQAAAA==
 				</data>
 			</dict>
 		</dict>
@@ -1561,7 +1603,7 @@
 				AAAAAAAAAAAAAAAAAAA=
 				</data>
 				<key>boot-args</key>
-				<string>keepsyms=1 -vi2c-force-polling -v alcid=15 -igfxvesa</string>
+				<string>keepsyms=1 -vi2c-force-polling -v alcid=15</string>
 				<key>csr-active-config</key>
 				<data>
 				EwoAAA==
