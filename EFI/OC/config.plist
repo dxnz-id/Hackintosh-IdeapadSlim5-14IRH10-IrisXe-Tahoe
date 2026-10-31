@@ -1244,7 +1244,7 @@
 				<key>Comment</key>
 				<string>laobamac AirportItlwm-Tahoe v2.4.0-alpha 738d4c6 (native IO80211Family/Skywalk)</string>
 				<key>Enabled</key>
-				<true/>
+				<false/>
 				<key>ExecutablePath</key>
 				<string>Contents/MacOS/AirportItlwm</string>
 				<key>MaxKernel</key>
@@ -1623,7 +1623,7 @@
 				AAAAAAAAAAAAAAAAAAA=
 				</data>
 				<key>boot-args</key>
-				<string>-v IGLogLevel=3 -ngreentglwithgfx -allow3d -disablegfxfirmware ngreen-dmc=adlp -ngreenv189 -ngreenkeepefi -ngreenxefix -ngreenfixbootmode amfi_get_out_of_my_way=1 ngreenSched=4 ngreenV142=3 gfxrst=1 -ngreenpm ngreen-eu=48 ngreen-l3=6 alcid=15 -vi2c-force-polling</string>
+				<string>-v IGLogLevel=3 -ngreentglwithgfx -allow3d -disablegfxfirmware ngreen-dmc=adlp -ngreenv189 -ngreenkeepefi -ngreenxefix -ngreenfixbootmode amfi_get_out_of_my_way=1 ngreenSched=4 ngreenV142=3 gfxrst=1 ngreen-eu=48 ngreen-l3=6 alcid=15 -vi2c-force-polling</string>
 				<key>csr-active-config</key>
 				<data>
 				EwoAAA==
