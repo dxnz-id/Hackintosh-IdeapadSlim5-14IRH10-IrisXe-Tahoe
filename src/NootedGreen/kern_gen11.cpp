@@ -6855,6 +6855,23 @@ void *Gen11::igAccelTaskWithOptions(void *that)
 		bool ok = FunctionCast(igAccelTaskInitWithOptions, callback->oigAccelTaskInitWithOptions)(task, that);
 		SYSLOG("ngreen", "V1002: initWithOptions=%d task=%p", (int)ok, task);
 		if (!ok) return nullptr;  // shortcut: stub leaked on fail, acceptable for now
+		// V1007: retroactively run initStampAndScratchPages on the V1002 stub task.
+		// The stub was created before createShared ran, so its stamp/scratch buffers
+		// (task+0x280/0x288) were never allocated. Now acc+0x150 and acc+0x378 are
+		// valid, so the allocation is safe. IAF2 crashes (CR2=0 in IAF2+0x1123b under
+		// WindowServer) if task+0x288 remains null when IOAccelDevice2::open runs.
+		auto *stub = callback->igAccelStubTask;
+		if (stub) {
+			void *stubStamp = *reinterpret_cast<void **>(reinterpret_cast<uint8_t *>(stub) + 0x288);
+			if (!stubStamp) {
+				SYSLOG("ngreen", "V1007: retroactive initStampAndScratchPages stub=%p acc=%p", stub, that);
+				FunctionCast(igAccelTaskInitStampAndScratchPages,
+				             callback->oigAccelTaskInitStampAndScratchPages)(stub);
+				void *newStamp = *reinterpret_cast<void **>(reinterpret_cast<uint8_t *>(stub) + 0x288);
+				SYSLOG("ngreen", "V1007: stub stamp=%p scratch=%p", newStamp,
+				       *reinterpret_cast<void **>(reinterpret_cast<uint8_t *>(stub) + 0x280));
+			}
+		}
 		return task;
 	}
 	auto *task = FunctionCast(igAccelTaskWithOptions, callback->oigAccelTaskWithOptions)(that);
