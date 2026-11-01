@@ -1402,11 +1402,6 @@ private:
 	static bool igAccelTaskInitAllocators(void *that, void *accelerator);
 	mach_vm_address_t oigAccelTaskInitAllocators {};
 
-	// V1001: hook IGAccelTask::initStampAndScratchPages — on RPL acc+0x150 (stamp memory base)
-	// is null during IntelAccelerator::start (IAF2 fills it later via createShared). Skip early
-	// so initWithOptions succeeds; IAF2 calls this again after createShared when acc+0x150 is valid.
-	static bool igAccelTaskInitStampAndScratchPages(void *that);
-	mach_vm_address_t oigAccelTaskInitStampAndScratchPages {};
 	
 	static unsigned long submitBlit(void *that, void *param_1, void *param_2, void *param_3, bool param_4);
 	mach_vm_address_t osubmitBlit {};

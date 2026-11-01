@@ -1913,8 +1913,6 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		 // V1000: bypass initAllocators failure on RPL so initWithOptions succeeds, letting
 		 // IAF2 proceed to createShared which populates IntelAccelerator+0x150 (stamp memory base).
 		 {"__ZN11IGAccelTask14initAllocatorsEP16IntelAccelerator", igAccelTaskInitAllocators, this->oigAccelTaskInitAllocators},
-		 // V1001: skip initStampAndScratchPages when acc+0x150 null (IAF2 fills it later).
-		 {"__ZN11IGAccelTask24initStampAndScratchPagesEv", igAccelTaskInitStampAndScratchPages, this->oigAccelTaskInitStampAndScratchPages},
 
 			 // V36: Hook readAndClearInterrupts to initialize Gen11 multi-engine GT interrupts.
 			 // Without this, RCS/BCS user interrupts and context-switch notifications may not
@@ -6818,31 +6816,32 @@ void *Gen11::igAccelTaskWithOptions(void *that)
 		return ctx;
 	};
 
-	// V999 DIAG: dump IntelAccelerator fields read by IGAccelTask::initAllocators to diagnose
-	// IGAccelTask::initWithOptions failure (null deref at task+0xc78). Remove after root cause confirmed.
-	if (!NGreen::callback->isRealTGL) {
-		auto *acc = reinterpret_cast<uint8_t *>(that);
-		SYSLOG("ngreen", "V999 DIAG pre-withOptions: acc=%p +0x1260=%p +0x1258=%p +0x1268=%p +0x1270=%p",
-			that,
-			*reinterpret_cast<void **>(acc + 0x1260),
-			*reinterpret_cast<void **>(acc + 0x1258),
-			*reinterpret_cast<void **>(acc + 0x1268),
-			*reinterpret_cast<void **>(acc + 0x1270));
-	}
-	// V999 DIAG: on RPL, bypass original withOptions (which calls release() on failed task → crash).
-	// alloc via MetaClass::alloc() directly, call initWithOptions; on failure return null without release().
+	// V1002: on RPL cold boot, acc+0x150 (IGAccelShared*) is null here because
+	// IOGraphicsAccelerator2::start calls IGAccelTask::withOptions BEFORE createShared
+	// fills it. IGAccelTask::initWithOptions needs acc+0x150 for initStampAndScratchPages
+	// and IGAuxPageTable::initWithOptions (getScratchGPUVirtualAddress). If null, return a
+	// bare stub task (vtable valid from alloc, task+0x10=acc) without calling initWithOptions.
+	// IAF2 stores this stub, proceeds to createShared which fills acc+0x150, then subsequent
+	// withOptions calls (per-process tasks) have acc+0x150 valid and call initWithOptions normally.
 	if (!NGreen::callback->isRealTGL && callback->igAccelTaskAlloc) {
-		// IGAccelTask::MetaClass::alloc() takes no args, returns new IGAccelTask* or null
+		auto *accBytes = reinterpret_cast<uint8_t *>(that);
+		void *stampBase = *reinterpret_cast<void **>(accBytes + 0x150);
+		if (!stampBase) {
+			// Cold boot: acc+0x150 null — return stub without initWithOptions to avoid crash.
+			auto *task = reinterpret_cast<void *(*)()>(callback->igAccelTaskAlloc)();
+			SYSLOG("ngreen", "V1002: stub task=%p acc=%p (acc+0x150 null, deferring init)", task, that);
+			if (!task) return nullptr;
+			// Set task+0x10 = acc so any code reading the IntelAccelerator pointer is safe.
+			*reinterpret_cast<void **>(reinterpret_cast<uint8_t *>(task) + 0x10) = that;
+			return task;
+		}
+		// acc+0x150 valid: alloc and fully init the task normally.
 		auto *task = reinterpret_cast<void *(*)()>(callback->igAccelTaskAlloc)();
-		SYSLOG("ngreen", "V999: alloc IGAccelTask=%p", task);
+		SYSLOG("ngreen", "V1002: full init task=%p acc=%p (acc+0x150=%p)", task, that, stampBase);
 		if (!task) return nullptr;
 		bool ok = FunctionCast(igAccelTaskInitWithOptions, callback->oigAccelTaskInitWithOptions)(task, that);
-		SYSLOG("ngreen", "V999: initWithOptions=%d task=%p", (int)ok, task);
-		if (!ok) {
-			// initWithOptions failed — do NOT call release() (that crashes). Return null safely.
-			// shortcut: task object leaked on failure, fix when switching to fix path.
-			return nullptr;
-		}
+		SYSLOG("ngreen", "V1002: initWithOptions=%d task=%p", (int)ok, task);
+		if (!ok) return nullptr;  // shortcut: stub leaked on fail, acceptable for now
 		return task;
 	}
 	auto *task = FunctionCast(igAccelTaskWithOptions, callback->oigAccelTaskWithOptions)(that);
@@ -6915,27 +6914,6 @@ bool Gen11::igAccelTaskInitAllocators(void *that, void *accelerator)
 	return true;
 }
 
-// V1001: hook IGAccelTask::initStampAndScratchPages on RPL.
-// During IntelAccelerator::start, acc+0x150 (stamp memory base) is null because
-// IAF2 fills it only later via IOGraphicsAccelerator2::createShared. Without this
-// guard the function falls to the allocate-new-IGMappedBuffer path which calls
-// allocGPUVirtualAddress -> IAF2 dereferences acc+0x378 (null) -> CR2=0 panic.
-// IAF2 will call initStampAndScratchPages again after createShared when +0x150 is valid.
-bool Gen11::igAccelTaskInitStampAndScratchPages(void *that)
-{
-	if (NGreen::callback->isRealTGL)
-		return FunctionCast(igAccelTaskInitStampAndScratchPages, callback->oigAccelTaskInitStampAndScratchPages)(that);
-
-	// task+0x10 = IntelAccelerator*, acc+0x150 = stamp memory base
-	auto *acc = *reinterpret_cast<uint8_t **>(reinterpret_cast<uint8_t *>(that) + 0x10);
-	if (!acc) return false;
-	void *stampBase = *reinterpret_cast<void **>(acc + 0x150);
-	if (!stampBase || stampBase == that) {
-		SYSLOG("ngreen", "V1001: initStampAndScratchPages skip (acc+0x150 null), task=%p", that);
-		return true;  // defer; IAF2 retries after createShared fills acc+0x150
-	}
-	return FunctionCast(igAccelTaskInitStampAndScratchPages, callback->oigAccelTaskInitStampAndScratchPages)(that);
-}
 
 void * Gen11::getBlit3DContext(void *that,bool param_1)
 {
