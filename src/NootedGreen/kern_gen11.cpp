@@ -6992,24 +6992,37 @@ bool Gen11::igAccelTaskInitAllocators(void *that, void *accelerator)
 	void *alloc1 = *reinterpret_cast<void **>(taskBytes + 0x2d0);
 	SYSLOG("ngreen", "V1012: org initAllocators returned %d (alloc0=%p, alloc1=%p)", (int)ok, alloc0, alloc1);
 
-	if (ok && alloc0 && alloc1)
-		return true;
-
 	// Fallback: if either allocator is null, instantiate a real IGRangeAllocator using
 	// Apple's IGRangeAllocator::withRange(0, size, 4096)
-	if (!*reinterpret_cast<void **>(taskBytes + 0x2c8)) {
+	if (!alloc0) {
 		if (callback->igRangeAllocatorWithRange) {
 			auto *r0 = reinterpret_cast<void *(*)(uint64_t, uint64_t, uint64_t)>(callback->igRangeAllocatorWithRange)(0, 0x4000000ULL, 4096);
 			*reinterpret_cast<void **>(taskBytes + 0x2c8) = r0;
+			alloc0 = r0;
 			SYSLOG("ngreen", "V1012: fallback IGRangeAllocator0=%p", r0);
 		}
 	}
-	if (!*reinterpret_cast<void **>(taskBytes + 0x2d0)) {
+	if (!alloc1) {
 		if (callback->igRangeAllocatorWithRange) {
 			auto *r1 = reinterpret_cast<void *(*)(uint64_t, uint64_t, uint64_t)>(callback->igRangeAllocatorWithRange)(0, 0x100000000ULL, 4096);
 			*reinterpret_cast<void **>(taskBytes + 0x2d0) = r1;
+			alloc1 = r1;
 			SYSLOG("ngreen", "V1012: fallback IGRangeAllocator1=%p", r1);
 		}
+	}
+
+	// V1015: Reserve range below 0x40000000 (1GB) in segment 1 (unified GART)
+	// and first 64KB in segment 0 (stolen) so that GPU virtual addresses never start at 0 (NULL).
+	// In IOAccelTask::freeToAllocGPUAddress, an allocated address of 0 is treated as NULL/failure.
+	if (alloc1) {
+		auto *ra1 = static_cast<IORangeAllocator *>(alloc1);
+		bool r1 = ra1->allocateRange(0, 0x40000000ULL);
+		SYSLOG("ngreen", "V1015: reserved [0, 1GB) in alloc1 (GART) = %d", (int)r1);
+	}
+	if (alloc0) {
+		auto *ra0 = static_cast<IORangeAllocator *>(alloc0);
+		bool r0 = ra0->allocateRange(0, 0x10000ULL);
+		SYSLOG("ngreen", "V1015: reserved [0, 64KB) in alloc0 (stolen) = %d", (int)r0);
 	}
 
 	return true;
