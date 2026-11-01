@@ -1907,6 +1907,9 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			 // V132: Hook task producers so submitBlit never sees a null IGAccelTask on spoofed RPL.
 			 {"__ZN16IntelAccelerator17createUserGPUTaskEv", createUserGPUTask, this->ocreateUserGPUTask},
 			 {"__ZN11IGAccelTask11withOptionsEP16IntelAccelerator", igAccelTaskWithOptions, this->oigAccelTaskWithOptions},
+		 // V999 DIAG: intercept initWithOptions to log accelerator struct offsets before the
+		 // half-init release() crash. Reveals which IGMemoryManager field is null.
+		 {"__ZN11IGAccelTask15initWithOptionsEP16IntelAccelerator", igAccelTaskInitWithOptions, this->oigAccelTaskInitWithOptions},
 
 			 // V36: Hook readAndClearInterrupts to initialize Gen11 multi-engine GT interrupts.
 			 // Without this, RCS/BCS user interrupts and context-switch notifications may not
@@ -2000,6 +2003,12 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		SYSLOG("ngreen", "V165: routing %zu HW accelerator symbols", sizeof(requests)/sizeof(requests[0]));
 		PANIC_COND(!RouteRequestPlus::routeAll(patcher, index, requests, address, size), "ngreen","Failed to route symbols");
 		SYSLOG("ngreen", "V165: HW accelerator symbols routed OK");
+		// V999 DIAG: resolve IGAccelTask alloc for safe task creation without crash-on-fail
+		igAccelTaskGMetaClass = patcher.solveSymbol(index, "__ZN11IGAccelTask10gMetaClassE", address, size);
+		patcher.clearError();
+		igAccelTaskAlloc = patcher.solveSymbol(index, "__ZNK11IGAccelTask9MetaClass5allocEv", address, size);
+		patcher.clearError();
+		SYSLOG("ngreen", "V999: IGAccelTask gMetaClass=%p alloc=%p", (void *)igAccelTaskGMetaClass, (void *)igAccelTaskAlloc);
 
 		if (checkKernelArgument("-ngreenxefix")) {  // xe/flipdiag: só contadores, sem mudar comportamento
 			RouteRequestPlus flipDiag[] = {
@@ -6788,6 +6797,33 @@ void *Gen11::igAccelTaskWithOptions(void *that)
 		return ctx;
 	};
 
+	// V999 DIAG: dump IntelAccelerator fields read by IGAccelTask::initAllocators to diagnose
+	// IGAccelTask::initWithOptions failure (null deref at task+0xc78). Remove after root cause confirmed.
+	if (!NGreen::callback->isRealTGL) {
+		auto *acc = reinterpret_cast<uint8_t *>(that);
+		SYSLOG("ngreen", "V999 DIAG pre-withOptions: acc=%p +0x1260=%p +0x1258=%p +0x1268=%p +0x1270=%p",
+			that,
+			*reinterpret_cast<void **>(acc + 0x1260),
+			*reinterpret_cast<void **>(acc + 0x1258),
+			*reinterpret_cast<void **>(acc + 0x1268),
+			*reinterpret_cast<void **>(acc + 0x1270));
+	}
+	// V999 DIAG: on RPL, bypass original withOptions (which calls release() on failed task → crash).
+	// alloc via MetaClass::alloc() directly, call initWithOptions; on failure return null without release().
+	if (!NGreen::callback->isRealTGL && callback->igAccelTaskAlloc) {
+		// IGAccelTask::MetaClass::alloc() takes no args, returns new IGAccelTask* or null
+		auto *task = reinterpret_cast<void *(*)()>(callback->igAccelTaskAlloc)();
+		SYSLOG("ngreen", "V999: alloc IGAccelTask=%p", task);
+		if (!task) return nullptr;
+		bool ok = FunctionCast(igAccelTaskInitWithOptions, callback->oigAccelTaskInitWithOptions)(task, that);
+		SYSLOG("ngreen", "V999: initWithOptions=%d task=%p", (int)ok, task);
+		if (!ok) {
+			// initWithOptions failed — do NOT call release() (that crashes). Return null safely.
+			// shortcut: task object leaked on failure, fix when switching to fix path.
+			return nullptr;
+		}
+		return task;
+	}
 	auto *task = FunctionCast(igAccelTaskWithOptions, callback->oigAccelTaskWithOptions)(that);
 	if (isExperimentalMonitorEnabled()) {
 		static int v137WithOptionsCount = 0;
@@ -6816,6 +6852,26 @@ void *Gen11::igAccelTaskWithOptions(void *that)
 	}
 
 	return nullptr;
+}
+
+// V999 DIAG: hook IGAccelTask::initWithOptions to log accelerator field values
+// before the half-init release() crash. Remove after root cause confirmed.
+bool Gen11::igAccelTaskInitWithOptions(void *that, void *accelerator)
+{
+	if (!NGreen::callback->isRealTGL && accelerator) {
+		auto *acc = reinterpret_cast<uint8_t *>(accelerator);
+		void *f1258 = *reinterpret_cast<void **>(acc + 0x1258);
+		void *f1260 = *reinterpret_cast<void **>(acc + 0x1260);
+		void *f1268 = *reinterpret_cast<void **>(acc + 0x1268);
+		void *f1270 = *reinterpret_cast<void **>(acc + 0x1270);
+		void *f1278 = *reinterpret_cast<void **>(acc + 0x1278);
+		SYSLOG("ngreen", "V999 initWithOpt pre: acc=%p +1258=%p +1260=%p +1268=%p +1270=%p +1278=%p",
+			accelerator, f1258, f1260, f1268, f1270, f1278);
+	}
+	bool ret = FunctionCast(igAccelTaskInitWithOptions, callback->oigAccelTaskInitWithOptions)(that, accelerator);
+	if (!NGreen::callback->isRealTGL)
+		SYSLOG("ngreen", "V999 initWithOpt ret=%d task=%p", (int)ret, that);
+	return ret;
 }
 
 void * Gen11::getBlit3DContext(void *that,bool param_1)

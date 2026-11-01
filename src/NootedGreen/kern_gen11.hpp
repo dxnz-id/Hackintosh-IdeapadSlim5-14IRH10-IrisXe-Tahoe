@@ -1390,6 +1390,12 @@ private:
 
 	static void *igAccelTaskWithOptions(void *that);  // V132: cache successful task allocations for null-task fallback
 	mach_vm_address_t oigAccelTaskWithOptions {};
+
+	// V999 DIAG: intercept IGAccelTask::initWithOptions to log failure reason before release() panic
+	static bool igAccelTaskInitWithOptions(void *that, void *accelerator);
+	mach_vm_address_t oigAccelTaskInitWithOptions {};
+	mach_vm_address_t igAccelTaskGMetaClass {};  // V999: IGAccelTask::gMetaClass for safe alloc
+	mach_vm_address_t igAccelTaskAlloc {};       // V999: IGAccelTask::MetaClass::alloc() direct symbol
 	
 	static unsigned long submitBlit(void *that, void *param_1, void *param_2, void *param_3, bool param_4);
 	mach_vm_address_t osubmitBlit {};
