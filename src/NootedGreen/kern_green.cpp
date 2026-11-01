@@ -149,8 +149,8 @@ void NGreen::init() {
 	
 	lilu.onKextLoadForce(&kextAGDP);
 	/*lilu.onKextLoadForce(&kextBacklight);
-	lilu.onKextLoadForce(&kextMCCSControl);
-	lilu.onKextLoadForce(&kextIOGraphics);*/
+	lilu.onKextLoadForce(&kextMCCSControl);*/
+	lilu.onKextLoadForce(&kextIOGraphics);
 	lilu.onKextLoadForce(&kextIOAcceleratorFamily2);
 	
 	genx.init();
@@ -502,6 +502,52 @@ static IOReturn wrapSetIdMode(void *that, uint32_t id, uint32_t mode) {
     return ret;
 }
 
+// V1016: Guard IOFramebuffer::getAttributeExt against uninitialized/phantom framebuffers.
+// In IOAccelDisplayPipe2::displayModeDidChange, each pipe queries its framebuffer's mirror
+// attribute via getAttributeExt('mirr', ...). When a pipe has no active display (FB1/FB2),
+// fb->priv (offset 0x1c8) is NULL, crashing with CR2=0x0 at getAttributeExt+0x25.
+static mach_vm_address_t orgIOFramebufferGetAttributeExt = 0;
+static IOReturn wrapIOFramebufferGetAttributeExt(void *that, uint32_t attribute, uintptr_t *value) {
+	if (!that)
+		return kIOReturnBadArgument;
+	void *priv = *reinterpret_cast<void **>(static_cast<uint8_t *>(that) + 0x1c8);
+	if (!priv) {
+		if (value) *value = 0;
+		return kIOReturnUnsupported;
+	}
+	return FunctionCast(wrapIOFramebufferGetAttributeExt, orgIOFramebufferGetAttributeExt)(that, attribute, value);
+}
+
+static mach_vm_address_t orgIOFramebufferGetAttributeForConnectionExt = 0;
+static IOReturn wrapIOFramebufferGetAttributeForConnectionExt(void *that, int32_t connectIndex, uint32_t attribute, uintptr_t *value) {
+	if (!that)
+		return kIOReturnBadArgument;
+	void *priv = *reinterpret_cast<void **>(static_cast<uint8_t *>(that) + 0x1c8);
+	if (!priv) {
+		if (value) *value = 0;
+		return kIOReturnUnsupported;
+	}
+	return FunctionCast(wrapIOFramebufferGetAttributeForConnectionExt, orgIOFramebufferGetAttributeForConnectionExt)(that, connectIndex, attribute, value);
+}
+
+// V1016: Guard IOAccelDisplayPipe2::displayModeDidChange against pipes with NULL/uninitialized FB.
+static mach_vm_address_t orgDisplayModeDidChange = 0;
+static void wrapDisplayModeDidChange(void *that) {
+	if (!that)
+		return;
+	void *fb = *reinterpret_cast<void **>(static_cast<uint8_t *>(that) + 0x98);
+	void *priv = fb ? *reinterpret_cast<void **>(static_cast<uint8_t *>(fb) + 0x1c8) : nullptr;
+	if (!priv) {
+		*reinterpret_cast<uint64_t *>(static_cast<uint8_t *>(that) + 0x368) = 0;
+		uint8_t active = *reinterpret_cast<uint8_t *>(static_cast<uint8_t *>(that) + 0x298);
+		if (!active) {
+			SYSLOG("ngreen", "V1016: skipped displayModeDidChange on inactive pipe %p (fb=%p, priv=NULL)", that, fb);
+			return;
+		}
+	}
+	FunctionCast(wrapDisplayModeDidChange, orgDisplayModeDidChange)(that);
+}
+
 bool NGreen::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size) {
 	if (kextIOAcceleratorFamily2.loadIndex == index) {
 		SYSLOG("NGreen", "IOAccelF2: TEXT 0x%llx size 0x%lx", address, size);
@@ -635,13 +681,28 @@ bool NGreen::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t
 			SYSLOG("ngreen", "V500: set_id_mode hook FAILED — symbol not found");
 		}
 
+		// V1016: Guard displayModeDidChange against phantom/uninitialized pipes
+		RouteRequestPlus dpmRequest[] = {
+			{"__ZN18IOAccelDisplayPipe20displayModeDidChangeEv", wrapDisplayModeDidChange, orgDisplayModeDidChange},
+		};
+		if (RouteRequestPlus::routeAll(patcher, index, dpmRequest, address, size)) {
+			SYSLOG("ngreen", "V1016: hooked IOAccelDisplayPipe::displayModeDidChange");
+		} else {
+			patcher.clearError();
+			SYSLOG("ngreen", "V1016: displayModeDidChange hook FAILED");
+		}
+
 	}  else if (kextIOGraphics.loadIndex == index) {
-		/*
-		KernelPatcher::RouteRequest requests[] = {
-				{"__ZN13IOFramebuffer25extValidateDetailedTimingEP8OSObjectPvP25IOExternalMethodArguments", wrapValidateDetailedTiming},
-			};
-			patcher.routeMultiple(index, requests, address, size);
-			patcher.clearError();*/
+		RouteRequestPlus iogRequests[] = {
+			{"__ZN13IOFramebuffer15getAttributeExtEjPm", wrapIOFramebufferGetAttributeExt, orgIOFramebufferGetAttributeExt},
+			{"__ZN13IOFramebuffer28getAttributeForConnectionExtEijPm", wrapIOFramebufferGetAttributeForConnectionExt, orgIOFramebufferGetAttributeForConnectionExt},
+		};
+		if (RouteRequestPlus::routeAll(patcher, index, iogRequests, address, size)) {
+			SYSLOG("ngreen", "V1016: hooked IOFramebuffer getAttributeExt & getAttributeForConnectionExt");
+		} else {
+			patcher.clearError();
+			SYSLOG("ngreen", "V1016: IOFramebuffer getAttributeExt hooks FAILED");
+		}
 		
 	}  else if (kextAGDP.loadIndex == index) {
 		const LookupPatchPlus patch {&kextAGDP, kAGDPBoardIDKeyOriginal, kAGDPBoardIDKeyPatched, 1};
