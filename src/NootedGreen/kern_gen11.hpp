@@ -10,6 +10,7 @@
 #include "AppleIntelParams.hpp"
 #include <Headers/kern_util.hpp>
 #include <IOKit/IOBufferMemoryDescriptor.h>
+#include <IOKit/IORangeAllocator.h>
 
 // ─── Platform info / connector structures (from NootedBlue reference) ────────
 // Note: ConnectorType enum is defined later in this file (below line 1100).

@@ -5787,36 +5787,19 @@ unsigned long Gen11::start(void *that,void  *param_1)
 			*reinterpret_cast<void **>(acc + 0x158),
 			*reinterpret_cast<void **>(acc + 0x160));
 	}
-	auto ret= FunctionCast(start, callback->ostart)(that,param_1);
+	auto ret = FunctionCast(start, callback->ostart)(that, param_1);
+	Gen11::gGfxAccelStartDone = (ret != 0);
+	SYSLOG("ngreen", "V1011: GFX start() complete — ret=%lu", ret);
 
-	if (!NGreen::callback->isRealTGL) {
+	if (!ret) {
 		auto *acc = reinterpret_cast<uint8_t *>(that);
-		SYSLOG("ngreen", "V999b post-start: +0x150=%p +0x158=%p +0x160=%p ret=%lu",
-			*reinterpret_cast<void **>(acc + 0x150),
-			*reinterpret_cast<void **>(acc + 0x158),
-			*reinterpret_cast<void **>(acc + 0x160), ret);
-	}
-	// V221: Signal waitForStamp hook that the GFX interrupt handler is now installed.
-	Gen11::gGfxAccelStartDone = true;
-	SYSLOG("ngreen", "V221: GFX start() complete — gGfxAccelStartDone=true ret=%lu", ret);
-
-	// V1010: Now that IntelAccelerator::start is complete and gGfxAccelStartDone is true,
-	// fully initialize the stub kernel task created during cold boot.
-	if (!NGreen::callback->isRealTGL && callback->igAccelStubTask) {
-		void *stub = callback->igAccelStubTask;
-		auto *acc = reinterpret_cast<uint8_t *>(that);
-		if (!*reinterpret_cast<void **>(acc + 0x150)) {
-			*reinterpret_cast<void **>(acc + 0x150) = stub;
-			SYSLOG("ngreen", "V1010: linked stub into acc+0x150");
+		uint32_t failCount = *reinterpret_cast<uint32_t *>(acc + 0x1c50);
+		SYSLOG("ngreen", "V1011: ostart FAILED! failCount=%u", failCount);
+		for (uint32_t i = 0; i < failCount && i < 8; i++) {
+			SYSLOG("ngreen", "V1011:   failureStack[%u] = 0x%x", i,
+			       *reinterpret_cast<uint32_t *>(acc + 0x1c30 + i * 4));
 		}
-		SYSLOG("ngreen", "V1010: post-start initializing stub task=%p acc=%p", stub, that);
-		bool ok = FunctionCast(igAccelTaskInitWithOptions,
-		                       callback->oigAccelTaskInitWithOptions)(stub, that);
-		void *stamp = *reinterpret_cast<void **>(reinterpret_cast<uint8_t *>(stub) + 0x288);
-		void *scratch = *reinterpret_cast<void **>(reinterpret_cast<uint8_t *>(stub) + 0x280);
-		void *aux = *reinterpret_cast<void **>(reinterpret_cast<uint8_t *>(stub) + 0x278);
-		SYSLOG("ngreen", "V1010: stub initWithOptions=%d stamp=%p scratch=%p aux=%p",
-		       (int)ok, stamp, scratch, aux);
+		return 0;
 	}
 
 	// V65: IMMEDIATELY after original start() returns, re-enable RCS0 interrupts.
@@ -6847,59 +6830,35 @@ void *Gen11::igAccelTaskWithOptions(void *that)
 		return ctx;
 	};
 
-	// V1002: on RPL cold boot, acc+0x150 (IGAccelShared*) is null here because
-	// IOGraphicsAccelerator2::start calls IGAccelTask::withOptions BEFORE createShared
-	// fills it. IGAccelTask::initWithOptions needs acc+0x150 for initStampAndScratchPages
-	// and IGAuxPageTable::initWithOptions (getScratchGPUVirtualAddress). If null, return a
-	// bare stub task (vtable valid from alloc, task+0x10=acc) without calling initWithOptions.
-	// IAF2 stores this stub, proceeds to createShared which fills acc+0x150, then subsequent
-	// withOptions calls (per-process tasks) have acc+0x150 valid and call initWithOptions normally.
-	if (!NGreen::callback->isRealTGL && callback->igAccelTaskAlloc) {
-		auto *accBytes = reinterpret_cast<uint8_t *>(that);
-		void *stampBase = *reinterpret_cast<void **>(accBytes + 0x150);
-		if (!stampBase) {
-			// V1010: Cold boot: acc+0x150 null. Return bare stub task now;
-			// Gen11::start will call initWithOptions retroactively after start() completes.
-			auto *task = reinterpret_cast<void *(*)()>(callback->igAccelTaskAlloc)();
-			SYSLOG("ngreen", "V1010: stub task=%p acc=%p (deferring initWithOptions)", task, that);
-			if (!task) return nullptr;
-			*reinterpret_cast<void **>(reinterpret_cast<uint8_t *>(task) + 0x10) = that;
-			callback->igAccelStubTask = task;
-			return task;
-		}
-		// acc+0x150 valid: alloc and fully init the task normally.
-		auto *task = reinterpret_cast<void *(*)()>(callback->igAccelTaskAlloc)();
-		SYSLOG("ngreen", "V1010: full init task=%p acc=%p (acc+0x150=%p)", task, that, stampBase);
-		if (!task) return nullptr;
-		bool ok = FunctionCast(igAccelTaskInitWithOptions, callback->oigAccelTaskInitWithOptions)(task, that);
-		SYSLOG("ngreen", "V1010: initWithOptions=%d task=%p", (int)ok, task);
-		if (!ok) return nullptr;  // shortcut: stub leaked on fail, acceptable for now
-		return task;
-	}
-	auto *task = FunctionCast(igAccelTaskWithOptions, callback->oigAccelTaskWithOptions)(that);
-	if (isExperimentalMonitorEnabled()) {
-		static int v137WithOptionsCount = 0;
-		if (v137WithOptionsCount < 24) {
-			v137WithOptionsCount++;
-			void *taskVtable = task ? getMember<void *>(task, 0x0) : nullptr;
-			void *taskCtx = task ? getMember<void *>(task, 0xb8) : nullptr;
-			SYSLOG("ngreen", "V137.withOptions[%d]: acc=%p task=%p vtbl=%p ctx=%p cached=%p",
-				   v137WithOptionsCount, that, task, taskVtable, taskCtx, callback->v132CachedTask);
-		}
-	}
 	if (NGreen::callback->isRealTGL)
-		return task;
+		return FunctionCast(igAccelTaskWithOptions, callback->oigAccelTaskWithOptions)(that);
 
+	// V1011: Call original IGAccelTask::withOptions.
+	// Since igAccelTaskInitAllocators now provides valid IORangeAllocators,
+	// initWithOptions and initStampAndScratchPages succeed cleanly on cold boot!
+	auto *task = FunctionCast(igAccelTaskWithOptions, callback->oigAccelTaskWithOptions)(that);
+	SYSLOG("ngreen", "V1011: org withOptions returned task=%p (acc=%p)", task, that);
 	if (task) {
 		callback->v132CachedTask = task;
-		ensureTaskContext(task, "withOptions");
-		DBGLOG("ngreen", "V132: IGAccelTask::withOptions created task=%p", task);
 		return task;
+	}
+
+	// Fallback if original returned null
+	if (callback->igAccelTaskAlloc) {
+		auto *fbTask = reinterpret_cast<void *(*)()>(callback->igAccelTaskAlloc)();
+		if (fbTask) {
+			*reinterpret_cast<void **>(reinterpret_cast<uint8_t *>(fbTask) + 0x10) = that;
+			bool ok = FunctionCast(igAccelTaskInitWithOptions, callback->oigAccelTaskInitWithOptions)(fbTask, that);
+			SYSLOG("ngreen", "V1011: fallback task=%p initWithOptions=%d", fbTask, (int)ok);
+			if (ok) {
+				callback->v132CachedTask = fbTask;
+				return fbTask;
+			}
+		}
 	}
 
 	if (callback->v132CachedTask) {
-		ensureTaskContext(callback->v132CachedTask, "withOptions-cached");
-		SYSLOG("ngreen", "V132: IGAccelTask::withOptions returned null, reusing cached task=%p", callback->v132CachedTask);
+		SYSLOG("ngreen", "V1011: reusing cached task=%p", callback->v132CachedTask);
 		return callback->v132CachedTask;
 	}
 
@@ -6926,42 +6885,91 @@ bool Gen11::igAccelTaskInitWithOptions(void *that, void *accelerator)
 	return ret;
 }
 
-// V1000: hook IGAccelTask::initAllocators -- on RPL, per-task address-range allocators
-// fail (IGCanonicalRangeAllocator::withRange returns null). Bypass so initWithOptions
-// succeeds and IAF2 proceeds to createShared, filling IntelAccelerator+0x150.
-// task+0x2c8/+0x2d0 remain null; callers that use them must handle null gracefully.
+// V1011: hook IGAccelTask::initAllocators.
+// Ensure valid IORangeAllocators for task+0x2c8 (stolen) and task+0x2d0 (unified).
+// Sets task+0x2d8 = 1 so newUnifiedAddressRangeAllocator uses standard IGRangeAllocator
+// instead of IGCanonicalRangeAllocator (which fails on RPL/Tahoe).
+// If original still fails, provides fallback IORangeAllocator instances so
+// allocGPUVirtualAddress NEVER crashes with CR2=0.
 bool Gen11::igAccelTaskInitAllocators(void *that, void *accelerator)
 {
 	if (NGreen::callback->isRealTGL)
 		return FunctionCast(igAccelTaskInitAllocators, callback->oigAccelTaskInitAllocators)(that, accelerator);
 
-	bool ok = FunctionCast(igAccelTaskInitAllocators, callback->oigAccelTaskInitAllocators)(that, accelerator);
-	if (!ok) {
-		auto *t = reinterpret_cast<uint8_t *>(that);
-		*reinterpret_cast<void **>(t + 0x2c8) = nullptr;
-		*reinterpret_cast<void **>(t + 0x2d0) = nullptr;
-		SYSLOG("ngreen", "V1000: initAllocators RPL bypass task=%p acc=%p", that, accelerator);
-		return true;
+	auto *taskBytes = reinterpret_cast<uint8_t *>(that);
+	auto *accBytes  = reinterpret_cast<uint8_t *>(accelerator);
+	void *memMgr    = *reinterpret_cast<void **>(accBytes + 0x1260);
+
+	if (memMgr) {
+		auto *mm = reinterpret_cast<uint8_t *>(memMgr);
+		uint64_t b0 = *reinterpret_cast<uint64_t *>(mm + 0xb0);
+		uint64_t b8 = *reinterpret_cast<uint64_t *>(mm + 0xb8);
+		uint64_t c0 = *reinterpret_cast<uint64_t *>(mm + 0xc0);
+		uint64_t c8 = *reinterpret_cast<uint64_t *>(mm + 0xc8);
+		uint64_t d0 = *reinterpret_cast<uint64_t *>(mm + 0xd0);
+		uint64_t d8 = *reinterpret_cast<uint64_t *>(mm + 0xd8);
+		uint8_t m100 = mm[0x100];
+		SYSLOG("ngreen", "V1011 initAllocators: memMgr=%p b0=0x%llx b8=0x%llx c0=0x%llx c8=0x%llx d0=0x%llx d8=0x%llx m100=%u",
+		       memMgr, b0, b8, c0, c8, d0, d8, (unsigned)m100);
+
+		// If stolen size (mm+0xb8) is 0, give it a reasonable default (64MB)
+		if (b8 == 0) {
+			*reinterpret_cast<uint64_t *>(mm + 0xb8) = 0x4000000ULL;
+			SYSLOG("ngreen", "V1011: fixed mm+0xb8 (stolen size) to 64MB");
+		}
+		// If unified range size (mm+0xc8) is 0, give it 3GB default
+		if (c8 == 0) {
+			*reinterpret_cast<uint64_t *>(mm + 0xc8) = 0xbe000000ULL;
+			SYSLOG("ngreen", "V1011: fixed mm+0xc8 (unified size) to 0xbe000000");
+		}
 	}
+
+	// Force task+0x2d8 = 1 so newUnifiedAddressRangeAllocator takes the IGRangeAllocator branch
+	// instead of IGCanonicalRangeAllocator.
+	taskBytes[0x2d8] = 1;
+
+	// Call original initAllocators
+	bool ok = FunctionCast(igAccelTaskInitAllocators, callback->oigAccelTaskInitAllocators)(that, accelerator);
+	void *alloc0 = *reinterpret_cast<void **>(taskBytes + 0x2c8);
+	void *alloc1 = *reinterpret_cast<void **>(taskBytes + 0x2d0);
+	SYSLOG("ngreen", "V1011: org initAllocators returned %d (alloc0=%p, alloc1=%p)", (int)ok, alloc0, alloc1);
+
+	if (ok && alloc0 && alloc1)
+		return true;
+
+	// Fallback: if either allocator is null, create a valid IORangeAllocator
+	// so IAF2 allocGPUVirtualAddress NEVER crashes with CR2=0.
+	if (!*reinterpret_cast<void **>(taskBytes + 0x2c8)) {
+		auto *r0 = IORangeAllocator::withRange(0x40000000ULL - 1, 4096, 0, IORangeAllocator::kLocking);
+		*reinterpret_cast<void **>(taskBytes + 0x2c8) = r0;
+		SYSLOG("ngreen", "V1011: fallback IORangeAllocator0=%p", r0);
+	}
+	if (!*reinterpret_cast<void **>(taskBytes + 0x2d0)) {
+		auto *r1 = IORangeAllocator::withRange(0x100000000ULL - 1, 4096, 0, IORangeAllocator::kLocking);
+		*reinterpret_cast<void **>(taskBytes + 0x2d0) = r1;
+		SYSLOG("ngreen", "V1011: fallback IORangeAllocator1=%p", r1);
+	}
+
 	return true;
 }
 
 
-// V1010: hook IGAccelTask::initStampAndScratchPages on RPL.
-// During IntelAccelerator::start, hardware/GMM/aux page tables are not ready.
-// Skip while !gGfxAccelStartDone. Once start() returns, Gen11::start calls
-// initWithOptions on the stub task which invokes this cleanly.
+// V1011: hook IGAccelTask::initStampAndScratchPages.
+// Let original initStampAndScratchPages RUN!
+// Because initAllocators ensures valid range allocators, allocGPUVirtualAddress
+// succeeds cleanly, allocating master scratch (task+0x280) and stamp (task+0x288) pages.
 bool Gen11::igAccelTaskInitStampAndScratchPages(void *that)
 {
 	if (NGreen::callback->isRealTGL)
 		return FunctionCast(igAccelTaskInitStampAndScratchPages, callback->oigAccelTaskInitStampAndScratchPages)(that);
 
-	if (!Gen11::gGfxAccelStartDone) {
-		SYSLOG("ngreen", "V1010: initStampAndScratch skip (start not done) task=%p", that);
-		return true;
-	}
-	SYSLOG("ngreen", "V1010: initStampAndScratch running task=%p", that);
-	return FunctionCast(igAccelTaskInitStampAndScratchPages, callback->oigAccelTaskInitStampAndScratchPages)(that);
+	SYSLOG("ngreen", "V1011: running org initStampAndScratchPages task=%p", that);
+	bool ret = FunctionCast(igAccelTaskInitStampAndScratchPages, callback->oigAccelTaskInitStampAndScratchPages)(that);
+	void *scratch = *reinterpret_cast<void **>(reinterpret_cast<uint8_t *>(that) + 0x280);
+	void *stamp   = *reinterpret_cast<void **>(reinterpret_cast<uint8_t *>(that) + 0x288);
+	SYSLOG("ngreen", "V1011: org initStampAndScratchPages returned %d (scratch=%p, stamp=%p)",
+	       (int)ret, scratch, stamp);
+	return ret;
 }
 
 
