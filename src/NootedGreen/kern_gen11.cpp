@@ -6863,20 +6863,26 @@ void *Gen11::igAccelTaskWithOptions(void *that)
 		bool ok = FunctionCast(igAccelTaskInitWithOptions, callback->oigAccelTaskInitWithOptions)(task, that);
 		SYSLOG("ngreen", "V1002: initWithOptions=%d task=%p", (int)ok, task);
 		if (!ok) return nullptr;  // shortcut: stub leaked on fail, acceptable for now
-		// V1008: retroactively run initStampAndScratchPages on the cold-boot stub.
-		// Stub got initWithOptions early (V1001 skipped stamps since acc+0x150 was null).
-		// Now acc+0x150/0x378 are valid, so stamp/scratch allocation is safe.
+		// V1008/V1009: retroactively run initStampAndScratchPages on the cold-boot stub.
+		// Requires both acc+0x150 (IGAccelShared) and acc+0x378 (GMM context) to be valid.
+		// acc+0x150 is valid here (we're in the "stampBase valid" path). acc+0x378 is set
+		// later in IntelAccelerator::start; if still null, skip -- the next withOptions
+		// call (when acc+0x378 valid) will retry.
 		auto *stub = callback->igAccelStubTask;
-		if (stub) {
+		void *gmmCtx = *reinterpret_cast<void **>(reinterpret_cast<uint8_t *>(that) + 0x378);
+		if (stub && gmmCtx) {
 			void *stubStamp = *reinterpret_cast<void **>(reinterpret_cast<uint8_t *>(stub) + 0x288);
 			if (!stubStamp) {
-				SYSLOG("ngreen", "V1008: retroactive initStampAndScratchPages stub=%p acc=%p", stub, that);
+				SYSLOG("ngreen", "V1009: retroactive initStampAndScratch stub=%p gmm=%p acc=%p",
+				       stub, gmmCtx, that);
 				FunctionCast(igAccelTaskInitStampAndScratchPages,
 				             callback->oigAccelTaskInitStampAndScratchPages)(stub);
 				void *newStamp = *reinterpret_cast<void **>(reinterpret_cast<uint8_t *>(stub) + 0x288);
-				SYSLOG("ngreen", "V1008: stub stamp=%p scratch=%p", newStamp,
+				SYSLOG("ngreen", "V1009: stub stamp=%p scratch=%p", newStamp,
 				       *reinterpret_cast<void **>(reinterpret_cast<uint8_t *>(stub) + 0x280));
 			}
+		} else {
+			SYSLOG("ngreen", "V1009: retroactive skip stub=%p gmm=%p (not ready)", stub, gmmCtx);
 		}
 		return task;
 	}
@@ -6952,26 +6958,30 @@ bool Gen11::igAccelTaskInitAllocators(void *that, void *accelerator)
 
 
 // V1001: hook IGAccelTask::initStampAndScratchPages on RPL.
-// IAF2 calls this separately on the V1002 stub kernel task before createShared fills
-// acc+0x150 (stamp memory base). Without this guard the function falls to the
-// alloc-new-IGMappedBuffer path, calls allocGPUVirtualAddress, dereferences acc+0x378
-// (null on RPL) -> CR2=0 panic. Skip when acc+0x150 null; when acc+0x150 is valid
-// (per-process tasks after createShared) call original normally.
+// IOGraphicsAccelerator2::start calls this before acc+0x150 (IGAccelShared*) and
+// acc+0x378 (GMM context for IGAccelMemoryMap::allocGPUVirtualAddress) are ready.
+// Skip when either is null; IGAuxPageTable::initWithOptions crashes (CR2=0x30) if
+// acc+0x378 null -- IGMappedBuffer::getGPUVirtualAddress reads null->field_0x30.
+// V1009: extended skip to also check acc+0x378.
 bool Gen11::igAccelTaskInitStampAndScratchPages(void *that)
 {
 	if (NGreen::callback->isRealTGL)
 		return FunctionCast(igAccelTaskInitStampAndScratchPages, callback->oigAccelTaskInitStampAndScratchPages)(that);
 
-	// task+0x10 = IntelAccelerator*, acc+0x150 = stamp memory base (IGAccelShared*)
+	// task+0x10 = IntelAccelerator*, acc+0x150 = IGAccelShared*, acc+0x378 = GMM context
 	auto *acc = *reinterpret_cast<uint8_t **>(reinterpret_cast<uint8_t *>(that) + 0x10);
 	if (!acc) return false;
 	void *stampBase = *reinterpret_cast<void **>(acc + 0x150);
-	if (!stampBase || stampBase == that) {
-		// acc+0x150 null: this is the V1002 stub kernel task, createShared not yet run.
-		// Return true to let IAF2 proceed; per-process tasks call this again with acc+0x150 valid.
-		SYSLOG("ngreen", "V1001: initStampAndScratchPages skip (acc+0x150 null), task=%p", that);
+	void *gmmCtx    = *reinterpret_cast<void **>(acc + 0x378);
+	if (!stampBase || stampBase == that || !gmmCtx) {
+		// Not ready: acc+0x150 (IGAccelShared) or acc+0x378 (GMM) not yet initialized.
+		// V1008 retroactive path will call us again once both are valid.
+		SYSLOG("ngreen", "V1009: initStampAndScratch skip stamp=%p gmm=%p task=%p",
+		       stampBase, gmmCtx, that);
 		return true;
 	}
+	SYSLOG("ngreen", "V1009: initStampAndScratch running stamp=%p gmm=%p task=%p",
+	       stampBase, gmmCtx, that);
 	return FunctionCast(igAccelTaskInitStampAndScratchPages, callback->oigAccelTaskInitStampAndScratchPages)(that);
 }
 
