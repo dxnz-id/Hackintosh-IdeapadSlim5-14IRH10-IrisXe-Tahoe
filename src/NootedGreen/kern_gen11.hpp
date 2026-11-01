@@ -1402,6 +1402,12 @@ private:
 	// so IAF2 proceeds to createShared and populates IntelAccelerator+0x150 (stamp memory base).
 	static bool igAccelTaskInitAllocators(void *that, void *accelerator);
 	mach_vm_address_t oigAccelTaskInitAllocators {};
+	mach_vm_address_t igRangeAllocatorWithRange {}; // V1012: IGRangeAllocator::withRange symbol
+
+	// V1012: guard IGScheduler::releaseSemaphoreWaitBuffers against NULL scheduler
+	// during early task teardown (acc+0x1250 is NULL before startGraphicsEngine).
+	static void igSchedulerReleaseSemaphoreWaitBuffers(void *that, void *task);
+	mach_vm_address_t oigSchedulerReleaseSemaphoreWaitBuffers {};
 
 	// V1001: hook IGAccelTask::initStampAndScratchPages
 	static bool igAccelTaskInitStampAndScratchPages(void *that);
