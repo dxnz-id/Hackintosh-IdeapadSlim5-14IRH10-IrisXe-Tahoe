@@ -5800,6 +5800,25 @@ unsigned long Gen11::start(void *that,void  *param_1)
 	Gen11::gGfxAccelStartDone = true;
 	SYSLOG("ngreen", "V221: GFX start() complete — gGfxAccelStartDone=true ret=%lu", ret);
 
+	// V1010: Now that IntelAccelerator::start is complete and gGfxAccelStartDone is true,
+	// fully initialize the stub kernel task created during cold boot.
+	if (!NGreen::callback->isRealTGL && callback->igAccelStubTask) {
+		void *stub = callback->igAccelStubTask;
+		auto *acc = reinterpret_cast<uint8_t *>(that);
+		if (!*reinterpret_cast<void **>(acc + 0x150)) {
+			*reinterpret_cast<void **>(acc + 0x150) = stub;
+			SYSLOG("ngreen", "V1010: linked stub into acc+0x150");
+		}
+		SYSLOG("ngreen", "V1010: post-start initializing stub task=%p acc=%p", stub, that);
+		bool ok = FunctionCast(igAccelTaskInitWithOptions,
+		                       callback->oigAccelTaskInitWithOptions)(stub, that);
+		void *stamp = *reinterpret_cast<void **>(reinterpret_cast<uint8_t *>(stub) + 0x288);
+		void *scratch = *reinterpret_cast<void **>(reinterpret_cast<uint8_t *>(stub) + 0x280);
+		void *aux = *reinterpret_cast<void **>(reinterpret_cast<uint8_t *>(stub) + 0x278);
+		SYSLOG("ngreen", "V1010: stub initWithOptions=%d stamp=%p scratch=%p aux=%p",
+		       (int)ok, stamp, scratch, aux);
+	}
+
 	// V65: IMMEDIATELY after original start() returns, re-enable RCS0 interrupts.
 	// Apple's init code may have overwritten our pre-start settings.
 	// This is our earliest opportunity after ring activation.
@@ -6839,51 +6858,22 @@ void *Gen11::igAccelTaskWithOptions(void *that)
 		auto *accBytes = reinterpret_cast<uint8_t *>(that);
 		void *stampBase = *reinterpret_cast<void **>(accBytes + 0x150);
 		if (!stampBase) {
-			// V1008: Cold boot: acc+0x150 null. Call initWithOptions on stub immediately
-			// so IOAccelDevice2::deviceStart can set up device+0x120 (event machine).
-			// V1001 skips initStampAndScratchPages when acc+0x150 null, so this is safe.
+			// V1010: Cold boot: acc+0x150 null. Return bare stub task now;
+			// Gen11::start will call initWithOptions retroactively after start() completes.
 			auto *task = reinterpret_cast<void *(*)()>(callback->igAccelTaskAlloc)();
-			SYSLOG("ngreen", "V1008: stub task=%p acc=%p (acc+0x150 null)", task, that);
+			SYSLOG("ngreen", "V1010: stub task=%p acc=%p (deferring initWithOptions)", task, that);
 			if (!task) return nullptr;
-			bool ok = FunctionCast(igAccelTaskInitWithOptions,
-			                       callback->oigAccelTaskInitWithOptions)(task, that);
-			SYSLOG("ngreen", "V1008: stub initWithOptions=%d task=%p", (int)ok, task);
-			if (!ok) {
-				// initWithOptions failed; set acc ptr as minimal fallback
-				*reinterpret_cast<void **>(reinterpret_cast<uint8_t *>(task) + 0x10) = that;
-				SYSLOG("ngreen", "V1008: initWithOptions failed, acc fallback set");
-			}
+			*reinterpret_cast<void **>(reinterpret_cast<uint8_t *>(task) + 0x10) = that;
 			callback->igAccelStubTask = task;
 			return task;
 		}
 		// acc+0x150 valid: alloc and fully init the task normally.
 		auto *task = reinterpret_cast<void *(*)()>(callback->igAccelTaskAlloc)();
-		SYSLOG("ngreen", "V1002: full init task=%p acc=%p (acc+0x150=%p)", task, that, stampBase);
+		SYSLOG("ngreen", "V1010: full init task=%p acc=%p (acc+0x150=%p)", task, that, stampBase);
 		if (!task) return nullptr;
 		bool ok = FunctionCast(igAccelTaskInitWithOptions, callback->oigAccelTaskInitWithOptions)(task, that);
-		SYSLOG("ngreen", "V1002: initWithOptions=%d task=%p", (int)ok, task);
+		SYSLOG("ngreen", "V1010: initWithOptions=%d task=%p", (int)ok, task);
 		if (!ok) return nullptr;  // shortcut: stub leaked on fail, acceptable for now
-		// V1008/V1009: retroactively run initStampAndScratchPages on the cold-boot stub.
-		// Requires both acc+0x150 (IGAccelShared) and acc+0x378 (GMM context) to be valid.
-		// acc+0x150 is valid here (we're in the "stampBase valid" path). acc+0x378 is set
-		// later in IntelAccelerator::start; if still null, skip -- the next withOptions
-		// call (when acc+0x378 valid) will retry.
-		auto *stub = callback->igAccelStubTask;
-		void *gmmCtx = *reinterpret_cast<void **>(reinterpret_cast<uint8_t *>(that) + 0x378);
-		if (stub && gmmCtx) {
-			void *stubStamp = *reinterpret_cast<void **>(reinterpret_cast<uint8_t *>(stub) + 0x288);
-			if (!stubStamp) {
-				SYSLOG("ngreen", "V1009: retroactive initStampAndScratch stub=%p gmm=%p acc=%p",
-				       stub, gmmCtx, that);
-				FunctionCast(igAccelTaskInitStampAndScratchPages,
-				             callback->oigAccelTaskInitStampAndScratchPages)(stub);
-				void *newStamp = *reinterpret_cast<void **>(reinterpret_cast<uint8_t *>(stub) + 0x288);
-				SYSLOG("ngreen", "V1009: stub stamp=%p scratch=%p", newStamp,
-				       *reinterpret_cast<void **>(reinterpret_cast<uint8_t *>(stub) + 0x280));
-			}
-		} else {
-			SYSLOG("ngreen", "V1009: retroactive skip stub=%p gmm=%p (not ready)", stub, gmmCtx);
-		}
 		return task;
 	}
 	auto *task = FunctionCast(igAccelTaskWithOptions, callback->oigAccelTaskWithOptions)(that);
@@ -6957,31 +6947,20 @@ bool Gen11::igAccelTaskInitAllocators(void *that, void *accelerator)
 }
 
 
-// V1001: hook IGAccelTask::initStampAndScratchPages on RPL.
-// IOGraphicsAccelerator2::start calls this before acc+0x150 (IGAccelShared*) and
-// acc+0x378 (GMM context for IGAccelMemoryMap::allocGPUVirtualAddress) are ready.
-// Skip when either is null; IGAuxPageTable::initWithOptions crashes (CR2=0x30) if
-// acc+0x378 null -- IGMappedBuffer::getGPUVirtualAddress reads null->field_0x30.
-// V1009: extended skip to also check acc+0x378.
+// V1010: hook IGAccelTask::initStampAndScratchPages on RPL.
+// During IntelAccelerator::start, hardware/GMM/aux page tables are not ready.
+// Skip while !gGfxAccelStartDone. Once start() returns, Gen11::start calls
+// initWithOptions on the stub task which invokes this cleanly.
 bool Gen11::igAccelTaskInitStampAndScratchPages(void *that)
 {
 	if (NGreen::callback->isRealTGL)
 		return FunctionCast(igAccelTaskInitStampAndScratchPages, callback->oigAccelTaskInitStampAndScratchPages)(that);
 
-	// task+0x10 = IntelAccelerator*, acc+0x150 = IGAccelShared*, acc+0x378 = GMM context
-	auto *acc = *reinterpret_cast<uint8_t **>(reinterpret_cast<uint8_t *>(that) + 0x10);
-	if (!acc) return false;
-	void *stampBase = *reinterpret_cast<void **>(acc + 0x150);
-	void *gmmCtx    = *reinterpret_cast<void **>(acc + 0x378);
-	if (!stampBase || stampBase == that || !gmmCtx) {
-		// Not ready: acc+0x150 (IGAccelShared) or acc+0x378 (GMM) not yet initialized.
-		// V1008 retroactive path will call us again once both are valid.
-		SYSLOG("ngreen", "V1009: initStampAndScratch skip stamp=%p gmm=%p task=%p",
-		       stampBase, gmmCtx, that);
+	if (!Gen11::gGfxAccelStartDone) {
+		SYSLOG("ngreen", "V1010: initStampAndScratch skip (start not done) task=%p", that);
 		return true;
 	}
-	SYSLOG("ngreen", "V1009: initStampAndScratch running stamp=%p gmm=%p task=%p",
-	       stampBase, gmmCtx, that);
+	SYSLOG("ngreen", "V1010: initStampAndScratch running task=%p", that);
 	return FunctionCast(igAccelTaskInitStampAndScratchPages, callback->oigAccelTaskInitStampAndScratchPages)(that);
 }
 
