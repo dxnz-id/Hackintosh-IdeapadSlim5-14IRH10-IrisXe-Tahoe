@@ -6956,19 +6956,21 @@ bool Gen11::igAccelTaskInitStampAndScratchPages(void *that)
 // rather than pointer equality: igAccelStubTask is not yet set when this path
 // runs (IAF2 calls IntelAccelerator::start before IGAccelTask::withOptions).
 // initializeOaBuffer null-checks withOptions return (TGL+0x76568+0x90), safe.
-void * Gen11::igSharedMappedBufferWithOptions(void *that, void *task,
+// IGSharedMappedBuffer::withOptions is a static factory method (no implicit this).
+// Args: task=RDI, size=RSI, flags=RDX, type=RCX.
+void * Gen11::igSharedMappedBufferWithOptions(void *task,
     unsigned long size, unsigned int flags, unsigned int type)
 {
 	if (!NGreen::callback->isRealTGL && task) {
-		// task+0x280 = scratch GPU virtual address set by initStampAndScratchPages.
-		// If null the task is uninitialized; allocGPUVirtualAddress will crash.
+		// task+0x280 = scratch GPU VA set by initStampAndScratchPages.
+		// If null the task is uninitialized; allocGPUVirtualAddress will crash (CR2=0).
 		void *scratchGPUVA = *reinterpret_cast<void **>(reinterpret_cast<uint8_t *>(task) + 0x280);
 		if (!scratchGPUVA) {
-			SYSLOG("ngreen", "V1004: withOptions blocked (task+0x280 null) task=%p", task);
+			SYSLOG("ngreen", "V1004: withOptions blocked (task+0x280 null) task=%p sz=0x%lx", task, size);
 			return nullptr;
 		}
 	}
-	return FunctionCast(igSharedMappedBufferWithOptions, callback->oigSharedMappedBufferWithOptions)(that, task, size, flags, type);
+	return FunctionCast(igSharedMappedBufferWithOptions, callback->oigSharedMappedBufferWithOptions)(task, size, flags, type);
 }
 
 

@@ -1408,8 +1408,9 @@ private:
 
 	void *igAccelStubTask {nullptr};  // V1002: stub kernel task (acc+0x150 null cold boot)
 
-	// V1004: block IGSharedMappedBuffer::withOptions on stub task
-	static void *igSharedMappedBufferWithOptions(void *that, void *task,
+	// V1004: block IGSharedMappedBuffer::withOptions when task not GPU-initialized
+	// Static method: no implicit this; args are (task, size, flags, type).
+	static void *igSharedMappedBufferWithOptions(void *task,
 	    unsigned long size, unsigned int flags, unsigned int type);
 	mach_vm_address_t oigSharedMappedBufferWithOptions {};
 
