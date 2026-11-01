@@ -1913,6 +1913,9 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		 // V1000: bypass initAllocators failure on RPL so initWithOptions succeeds, letting
 		 // IAF2 proceed to createShared which populates IntelAccelerator+0x150 (stamp memory base).
 		 {"__ZN11IGAccelTask14initAllocatorsEP16IntelAccelerator", igAccelTaskInitAllocators, this->oigAccelTaskInitAllocators},
+		 // V1001: skip initStampAndScratchPages when acc+0x150 null; IAF2 calls this separately
+		 // on the V1002 stub task before createShared fills acc+0x150 (CR2=0 panic).
+		 {"__ZN11IGAccelTask24initStampAndScratchPagesEv", igAccelTaskInitStampAndScratchPages, this->oigAccelTaskInitStampAndScratchPages},
 
 			 // V36: Hook readAndClearInterrupts to initialize Gen11 multi-engine GT interrupts.
 			 // Without this, RCS/BCS user interrupts and context-switch notifications may not
@@ -6912,6 +6915,31 @@ bool Gen11::igAccelTaskInitAllocators(void *that, void *accelerator)
 		return true;
 	}
 	return true;
+}
+
+
+// V1001: hook IGAccelTask::initStampAndScratchPages on RPL.
+// IAF2 calls this separately on the V1002 stub kernel task before createShared fills
+// acc+0x150 (stamp memory base). Without this guard the function falls to the
+// alloc-new-IGMappedBuffer path, calls allocGPUVirtualAddress, dereferences acc+0x378
+// (null on RPL) -> CR2=0 panic. Skip when acc+0x150 null; when acc+0x150 is valid
+// (per-process tasks after createShared) call original normally.
+bool Gen11::igAccelTaskInitStampAndScratchPages(void *that)
+{
+	if (NGreen::callback->isRealTGL)
+		return FunctionCast(igAccelTaskInitStampAndScratchPages, callback->oigAccelTaskInitStampAndScratchPages)(that);
+
+	// task+0x10 = IntelAccelerator*, acc+0x150 = stamp memory base (IGAccelShared*)
+	auto *acc = *reinterpret_cast<uint8_t **>(reinterpret_cast<uint8_t *>(that) + 0x10);
+	if (!acc) return false;
+	void *stampBase = *reinterpret_cast<void **>(acc + 0x150);
+	if (!stampBase || stampBase == that) {
+		// acc+0x150 null: this is the V1002 stub kernel task, createShared not yet run.
+		// Return true to let IAF2 proceed; per-process tasks call this again with acc+0x150 valid.
+		SYSLOG("ngreen", "V1001: initStampAndScratchPages skip (acc+0x150 null), task=%p", that);
+		return true;
+	}
+	return FunctionCast(igAccelTaskInitStampAndScratchPages, callback->oigAccelTaskInitStampAndScratchPages)(that);
 }
 
 

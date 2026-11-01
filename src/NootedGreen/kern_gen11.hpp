@@ -1402,6 +1402,10 @@ private:
 	static bool igAccelTaskInitAllocators(void *that, void *accelerator);
 	mach_vm_address_t oigAccelTaskInitAllocators {};
 
+	// V1001: hook IGAccelTask::initStampAndScratchPages
+	static bool igAccelTaskInitStampAndScratchPages(void *that);
+	mach_vm_address_t oigAccelTaskInitStampAndScratchPages {};
+
 	
 	static unsigned long submitBlit(void *that, void *param_1, void *param_2, void *param_3, bool param_4);
 	mach_vm_address_t osubmitBlit {};
