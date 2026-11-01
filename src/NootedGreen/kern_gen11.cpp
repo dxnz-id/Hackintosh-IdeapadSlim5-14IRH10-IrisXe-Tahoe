@@ -5704,7 +5704,6 @@ unsigned long Gen11::start(void *that,void  *param_1)
 	
 	// V42: Save accelerator instance for child enumeration in hangcheck
 	callback->accelInstance = that;
-	xeRc6FwStart(that);  // xe/rc6fw (22/10)
 	
 	// V54: Pre-enable Master IRQ BEFORE calling original start().
 	// V53 proved that the TGL driver never enables GFX_MSTR_IRQ bit 31 on RPL.
@@ -5802,6 +5801,8 @@ unsigned long Gen11::start(void *that,void  *param_1)
 	SYSLOG("ngreen", "V1011: GFX start() complete — ret=%lu", ret);
 
 	if (!ret) {
+		gFwAccel = nullptr;
+		callback->accelInstance = nullptr;
 		auto *acc = reinterpret_cast<uint8_t *>(that);
 		uint32_t failCount = *reinterpret_cast<uint32_t *>(acc + 0x1c50);
 		SYSLOG("ngreen", "V1011: ostart FAILED! failCount=%u", failCount);
@@ -5852,6 +5853,7 @@ unsigned long Gen11::start(void *that,void  *param_1)
 	IODelay(1000);
 	
 	SYSLOG("ngreen", "start() returned %d", ret);
+	xeRc6FwStart(that);  // xe/rc6fw only after accelerator successfully started
 	
 	// V43: Scheduler type diagnostic — read field_1190 bits 23-25
 	{
@@ -10643,7 +10645,9 @@ static void xeFwIdleWorker(thread_call_param_t, thread_call_param_t) {
 	static uint32_t lastSeq = 0, lastSub = 0, quietMs = 0, pubTick = 0;
 	const uint32_t tick = 100;
 	void *acc = gFwAccel;
-	if (acc && NGreen::callback) {
+	if (acc && NGreen::callback && Gen11::gGfxAccelStartDone) {
+		void *vtable = *reinterpret_cast<void **>(acc);
+		if (!vtable) return;
 		auto *a = static_cast<uint8_t *>(acc);
 		auto *cnt = reinterpret_cast<volatile int32_t *>(a + 0x1290);
 		uint32_t seq = gFwActSeq, sub = gCs5SubmitN;
@@ -10684,19 +10688,25 @@ static void xeFwIdleWorker(thread_call_param_t, thread_call_param_t) {
 		}
 		if (++pubTick >= 10) {  // 1 s: publish diagnostics (thread context, outside any lock)
 			pubTick = 0;
-			auto *svc = static_cast<IOService *>(acc);
-			svc->setProperty("xe-fw-leakdrops", gFwLeakDrops, 32);
-			svc->setProperty("xe-fw-leakdom", gFwLeakDom, 32);
-			svc->setProperty("xe-fw-leakcaller", (unsigned long long)gFwLeakCaller, 64);
-			svc->setProperty("xe-fw-underflow", gFwUnderflow, 32);
-			svc->setProperty("xe-fw-underflowcaller", (unsigned long long)gFwUnderflowCaller, 64);
-			svc->setProperty("xe-fw-count", (unsigned long long)(((uint64_t)(uint32_t)cnt[0]) | ((uint64_t)(uint16_t)cnt[1] << 32) | ((uint64_t)(uint16_t)cnt[2] << 48)), 64);
+			void *vt = *reinterpret_cast<void **>(acc);
+			if (vt) {
+				auto *svc = static_cast<IOService *>(acc);
+				svc->setProperty("xe-fw-leakdrops", gFwLeakDrops, 32);
+				svc->setProperty("xe-fw-leakdom", gFwLeakDom, 32);
+				svc->setProperty("xe-fw-leakcaller", (unsigned long long)gFwLeakCaller, 64);
+				svc->setProperty("xe-fw-underflow", gFwUnderflow, 32);
+				svc->setProperty("xe-fw-underflowcaller", (unsigned long long)gFwUnderflowCaller, 64);
+				svc->setProperty("xe-fw-count", (unsigned long long)(((uint64_t)(uint32_t)cnt[0]) | ((uint64_t)(uint16_t)cnt[1] << 32) | ((uint64_t)(uint16_t)cnt[2] << 48)), 64);
+			}
 		}
 	}
-	if (gFwIdleTc) {
-		uint64_t deadline = 0;
-		clock_interval_to_deadline(tick, kMillisecondScale, &deadline);
-		thread_call_enter_delayed(gFwIdleTc, deadline);
+	if (gFwIdleTc && Gen11::gGfxAccelStartDone && gFwAccel) {
+		void *vtable = *reinterpret_cast<void **>(gFwAccel);
+		if (vtable) {
+			uint64_t deadline = 0;
+			clock_interval_to_deadline(tick, kMillisecondScale, &deadline);
+			thread_call_enter_delayed(gFwIdleTc, deadline);
+		}
 	}
 }
 
