@@ -1396,6 +1396,11 @@ private:
 	mach_vm_address_t oigAccelTaskInitWithOptions {};
 	mach_vm_address_t igAccelTaskGMetaClass {};  // V999: IGAccelTask::gMetaClass for safe alloc
 	mach_vm_address_t igAccelTaskAlloc {};       // V999: IGAccelTask::MetaClass::alloc() direct symbol
+
+	// V1000: hook IGAccelTask::initAllocators to bypass failure on RPL — lets initWithOptions succeed
+	// so IAF2 proceeds to createShared and populates IntelAccelerator+0x150 (stamp memory base).
+	static bool igAccelTaskInitAllocators(void *that, void *accelerator);
+	mach_vm_address_t oigAccelTaskInitAllocators {};
 	
 	static unsigned long submitBlit(void *that, void *param_1, void *param_2, void *param_3, bool param_4);
 	mach_vm_address_t osubmitBlit {};

@@ -1910,6 +1910,9 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		 // V999 DIAG: intercept initWithOptions to log accelerator struct offsets before the
 		 // half-init release() crash. Reveals which IGMemoryManager field is null.
 		 {"__ZN11IGAccelTask15initWithOptionsEP16IntelAccelerator", igAccelTaskInitWithOptions, this->oigAccelTaskInitWithOptions},
+		 // V1000: bypass initAllocators failure on RPL so initWithOptions succeeds, letting
+		 // IAF2 proceed to createShared which populates IntelAccelerator+0x150 (stamp memory base).
+		 {"__ZN11IGAccelTask14initAllocatorsEP16IntelAccelerator", igAccelTaskInitAllocators, this->oigAccelTaskInitAllocators},
 
 			 // V36: Hook readAndClearInterrupts to initialize Gen11 multi-engine GT interrupts.
 			 // Without this, RCS/BCS user interrupts and context-switch notifications may not
@@ -5763,8 +5766,24 @@ unsigned long Gen11::start(void *that,void  *param_1)
 		}
 	}
 
+	// V999b: dump IntelAccelerator+0x150 (IGSharedMemory* / stamp memory base) before/after start
+	if (!NGreen::callback->isRealTGL) {
+		auto *acc = reinterpret_cast<uint8_t *>(that);
+		SYSLOG("ngreen", "V999b pre-start: acc=%p +0x150=%p +0x158=%p +0x160=%p",
+			that,
+			*reinterpret_cast<void **>(acc + 0x150),
+			*reinterpret_cast<void **>(acc + 0x158),
+			*reinterpret_cast<void **>(acc + 0x160));
+	}
 	auto ret= FunctionCast(start, callback->ostart)(that,param_1);
 
+	if (!NGreen::callback->isRealTGL) {
+		auto *acc = reinterpret_cast<uint8_t *>(that);
+		SYSLOG("ngreen", "V999b post-start: +0x150=%p +0x158=%p +0x160=%p ret=%lu",
+			*reinterpret_cast<void **>(acc + 0x150),
+			*reinterpret_cast<void **>(acc + 0x158),
+			*reinterpret_cast<void **>(acc + 0x160), ret);
+	}
 	// V221: Signal waitForStamp hook that the GFX interrupt handler is now installed.
 	Gen11::gGfxAccelStartDone = true;
 	SYSLOG("ngreen", "V221: GFX start() complete — gGfxAccelStartDone=true ret=%lu", ret);
@@ -6872,6 +6891,26 @@ bool Gen11::igAccelTaskInitWithOptions(void *that, void *accelerator)
 	if (!NGreen::callback->isRealTGL)
 		SYSLOG("ngreen", "V999 initWithOpt ret=%d task=%p", (int)ret, that);
 	return ret;
+}
+
+// V1000: hook IGAccelTask::initAllocators -- on RPL, per-task address-range allocators
+// fail (IGCanonicalRangeAllocator::withRange returns null). Bypass so initWithOptions
+// succeeds and IAF2 proceeds to createShared, filling IntelAccelerator+0x150.
+// task+0x2c8/+0x2d0 remain null; callers that use them must handle null gracefully.
+bool Gen11::igAccelTaskInitAllocators(void *that, void *accelerator)
+{
+	if (NGreen::callback->isRealTGL)
+		return FunctionCast(igAccelTaskInitAllocators, callback->oigAccelTaskInitAllocators)(that, accelerator);
+
+	bool ok = FunctionCast(igAccelTaskInitAllocators, callback->oigAccelTaskInitAllocators)(that, accelerator);
+	if (!ok) {
+		auto *t = reinterpret_cast<uint8_t *>(that);
+		*reinterpret_cast<void **>(t + 0x2c8) = nullptr;
+		*reinterpret_cast<void **>(t + 0x2d0) = nullptr;
+		SYSLOG("ngreen", "V1000: initAllocators RPL bypass task=%p acc=%p", that, accelerator);
+		return true;
+	}
+	return true;
 }
 
 void * Gen11::getBlit3DContext(void *that,bool param_1)
