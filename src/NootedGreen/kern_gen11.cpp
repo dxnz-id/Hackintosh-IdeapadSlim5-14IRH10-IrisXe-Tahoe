@@ -1920,6 +1920,9 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		 // telemetryCreateManager->initializeOaBuffer calls withOptions(stub_task).
 		 // allocGPUVirtualAddress crashes (CR2=0). initializeOaBuffer null-checks return.
 		 {"__ZN20IGSharedMappedBuffer11withOptionsEP11IGAccelTaskmjj", igSharedMappedBufferWithOptions, this->oigSharedMappedBufferWithOptions},
+		 // V1005: guard getStamps against NULL stamp buffer (task+0x288) when V1001 skips
+		 // initStampAndScratchPages. Prevents getVirtualAddress(NULL) crash (CR2=0x38).
+		 {"__ZNK11IGAccelTask9getStampsEv", igAccelTaskGetStamps, this->oigAccelTaskGetStamps},
 
 			 // V36: Hook readAndClearInterrupts to initialize Gen11 multi-engine GT interrupts.
 			 // Without this, RCS/BCS user interrupts and context-switch notifications may not
@@ -6971,6 +6974,24 @@ void * Gen11::igSharedMappedBufferWithOptions(void *task,
 		}
 	}
 	return FunctionCast(igSharedMappedBufferWithOptions, callback->oigSharedMappedBufferWithOptions)(task, size, flags, type);
+}
+
+
+// V1005: guard IGAccelTask::getStamps against NULL stamp buffer.
+// getStamps() = task->field[0x288] (IGSharedMappedBuffer*) -> getVirtualAddress().
+// V1001 skips initStampAndScratchPages when acc+0x150 null, leaving task+0x288 = NULL.
+// IGTelemetryUsage::initWithAcceleratorAndStampIndex calls getStamps(task) and passes
+// the result to getVirtualAddress without checking for NULL -> CR2=0x38 panic.
+void * Gen11::igAccelTaskGetStamps(void *that)
+{
+	if (!NGreen::callback->isRealTGL) {
+		void *stampBuf = *reinterpret_cast<void **>(reinterpret_cast<uint8_t *>(that) + 0x288);
+		if (!stampBuf) {
+			SYSLOG("ngreen", "V1005: getStamps null stamp buf, task=%p", that);
+			return nullptr;
+		}
+	}
+	return FunctionCast(igAccelTaskGetStamps, callback->oigAccelTaskGetStamps)(that);
 }
 
 

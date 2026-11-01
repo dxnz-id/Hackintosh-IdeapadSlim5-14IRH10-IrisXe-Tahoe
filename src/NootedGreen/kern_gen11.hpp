@@ -1414,6 +1414,12 @@ private:
 	    unsigned long size, unsigned int flags, unsigned int type);
 	mach_vm_address_t oigSharedMappedBufferWithOptions {};
 
+	// V1005: guard IGAccelTask::getStamps against NULL stamp buffer.
+	// getStamps() = task->field[0x288] -> getVirtualAddress(). If V1001 skipped
+	// initStampAndScratchPages, task+0x288 is NULL -> crash (CR2=0x38).
+	static void *igAccelTaskGetStamps(void *that);
+	mach_vm_address_t oigAccelTaskGetStamps {};
+
 	
 	static unsigned long submitBlit(void *that, void *param_1, void *param_2, void *param_3, bool param_4);
 	mach_vm_address_t osubmitBlit {};
