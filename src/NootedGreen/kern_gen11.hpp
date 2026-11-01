@@ -1409,6 +1409,12 @@ private:
 	static void igSchedulerReleaseSemaphoreWaitBuffers(void *that, void *task);
 	mach_vm_address_t oigSchedulerReleaseSemaphoreWaitBuffers {};
 
+	// V1013: hook IGAccelTask::isKernelGPUTask so the first task during createShared
+	// is always recognized as the kernel GPU task (acc+0x150 is still NULL).
+	// Prevents newPageTableForTask from dereferencing acc+0x150 (CR2=0x260 panic).
+	static bool igAccelTaskIsKernelGPUTask(void *that);
+	mach_vm_address_t oigAccelTaskIsKernelGPUTask {};
+
 	// V1001: hook IGAccelTask::initStampAndScratchPages
 	static bool igAccelTaskInitStampAndScratchPages(void *that);
 	mach_vm_address_t oigAccelTaskInitStampAndScratchPages {};

@@ -1928,6 +1928,10 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		 // V1012: guard IGScheduler::releaseSemaphoreWaitBuffers against NULL scheduler
 		 // during early task teardown (acc+0x1250 is NULL before startGraphicsEngine).
 		 {"__ZN11IGScheduler27releaseSemaphoreWaitBuffersEP11IGAccelTask", igSchedulerReleaseSemaphoreWaitBuffers, this->oigSchedulerReleaseSemaphoreWaitBuffers},
+		 // V1013: hook IGAccelTask::isKernelGPUTask so the first task during createShared
+		 // is always recognized as the kernel GPU task (acc+0x150 is still NULL).
+		 // Prevents newPageTableForTask from dereferencing acc+0x150 (CR2=0x260 panic).
+		 {"__ZNK11IGAccelTask15isKernelGPUTaskEv", igAccelTaskIsKernelGPUTask, this->oigAccelTaskIsKernelGPUTask},
 
 			 // V36: Hook readAndClearInterrupts to initialize Gen11 multi-engine GT interrupts.
 			 // Without this, RCS/BCS user interrupts and context-switch notifications may not
@@ -6818,6 +6822,29 @@ void Gen11::igSchedulerReleaseSemaphoreWaitBuffers(void *that, void *task)
 	FunctionCast(igSchedulerReleaseSemaphoreWaitBuffers, callback->oigSchedulerReleaseSemaphoreWaitBuffers)(that, task);
 }
 
+// V1013: hook IGAccelTask::isKernelGPUTask.
+// Apple's implementation checks task+0x258 == 0, then checks acc+0x150.
+// If task+0x258 was incremented by fTaskCounter, it returns false even when
+// acc+0x150 is NULL. In newPageTableForTask, returning false causes it to
+// dereference acc+0x150 to synchronize page tables -> CR2=0x260 page fault.
+// Fix: if acc+0x150 is NULL or matches that, it is ALWAYS the kernel GPU task!
+bool Gen11::igAccelTaskIsKernelGPUTask(void *that)
+{
+	if (!that)
+		return false;
+
+	if (!NGreen::callback->isRealTGL) {
+		void *acc = *reinterpret_cast<void **>(reinterpret_cast<uint8_t *>(that) + 0x10);
+		if (acc) {
+			void *kernelTask = *reinterpret_cast<void **>(reinterpret_cast<uint8_t *>(acc) + 0x150);
+			if (!kernelTask || kernelTask == that)
+				return true;
+		}
+	}
+
+	return FunctionCast(igAccelTaskIsKernelGPUTask, callback->oigAccelTaskIsKernelGPUTask)(that);
+}
+
 void *Gen11::igAccelTaskWithOptions(void *that)
 {
 	auto ensureTaskContext = [&](void *task, const char *origin) -> void * {
@@ -6948,6 +6975,14 @@ bool Gen11::igAccelTaskInitAllocators(void *that, void *accelerator)
 	// Force task+0x2d8 = 1 so newUnifiedAddressRangeAllocator takes the IGRangeAllocator branch
 	// instead of IGCanonicalRangeAllocator.
 	taskBytes[0x2d8] = 1;
+
+	// V1013: ensure task+0x258 is 0 for the kernel GPU task (acc+0x150 == null).
+	// On RPL, fTaskCounter may have incremented, making task+0x258 != 0,
+	// which causes isKernelGPUTask to return false and newPageTableForTask to crash (CR2=0x260).
+	void *kernelTask = *reinterpret_cast<void **>(accBytes + 0x150);
+	if (!kernelTask) {
+		*reinterpret_cast<uint64_t *>(taskBytes + 0x258) = 0;
+	}
 
 	// Call original initAllocators
 	bool ok = FunctionCast(igAccelTaskInitAllocators, callback->oigAccelTaskInitAllocators)(that, accelerator);
