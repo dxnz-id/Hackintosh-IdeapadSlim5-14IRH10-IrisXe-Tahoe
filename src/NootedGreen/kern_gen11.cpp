@@ -1916,6 +1916,10 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		 // V1001: skip initStampAndScratchPages when acc+0x150 null; IAF2 calls this separately
 		 // on the V1002 stub task before createShared fills acc+0x150 (CR2=0 panic).
 		 {"__ZN11IGAccelTask24initStampAndScratchPagesEv", igAccelTaskInitStampAndScratchPages, this->oigAccelTaskInitStampAndScratchPages},
+		 // V1004: block IGSharedMappedBuffer::withOptions on stub task. During start,
+		 // telemetryCreateManager->initializeOaBuffer calls withOptions(stub_task).
+		 // allocGPUVirtualAddress crashes (CR2=0). initializeOaBuffer null-checks return.
+		 {"__ZN20IGSharedMappedBuffer11withOptionsEP11IGAccelTaskmjj", igSharedMappedBufferWithOptions, this->oigSharedMappedBufferWithOptions},
 
 			 // V36: Hook readAndClearInterrupts to initialize Gen11 multi-engine GT interrupts.
 			 // Without this, RCS/BCS user interrupts and context-switch notifications may not
@@ -6836,6 +6840,7 @@ void *Gen11::igAccelTaskWithOptions(void *that)
 			if (!task) return nullptr;
 			// Set task+0x10 = acc so any code reading the IntelAccelerator pointer is safe.
 			*reinterpret_cast<void **>(reinterpret_cast<uint8_t *>(task) + 0x10) = that;
+			callback->igAccelStubTask = task;  // V1004: record for IGSharedMappedBuffer guard
 			return task;
 		}
 		// acc+0x150 valid: alloc and fully init the task normally.
@@ -6940,6 +6945,22 @@ bool Gen11::igAccelTaskInitStampAndScratchPages(void *that)
 		return true;
 	}
 	return FunctionCast(igAccelTaskInitStampAndScratchPages, callback->oigAccelTaskInitStampAndScratchPages)(that);
+}
+
+
+// V1004: guard IGSharedMappedBuffer::withOptions against stub kernel task.
+// During IntelAccelerator::start, telemetryCreateManager->IGSupportMDAPI::
+// initializeOaBuffer calls withOptions(stub_task, ...) before createShared.
+// stub_task has task+0x280 null so allocGPUVirtualAddress crashes (CR2=0).
+// initializeOaBuffer checks for null return so returning nullptr is safe.
+void * Gen11::igSharedMappedBufferWithOptions(void *that, void *task,
+    unsigned long size, unsigned int flags, unsigned int type)
+{
+	if (!NGreen::callback->isRealTGL && task && task == callback->igAccelStubTask) {
+		SYSLOG("ngreen", "V1004: IGSharedMappedBuffer::withOptions blocked on stub task=%p", task);
+		return nullptr;
+	}
+	return FunctionCast(igSharedMappedBufferWithOptions, callback->oigSharedMappedBufferWithOptions)(that, task, size, flags, type);
 }
 
 

@@ -1406,6 +1406,13 @@ private:
 	static bool igAccelTaskInitStampAndScratchPages(void *that);
 	mach_vm_address_t oigAccelTaskInitStampAndScratchPages {};
 
+	void *igAccelStubTask {nullptr};  // V1002: stub kernel task (acc+0x150 null cold boot)
+
+	// V1004: block IGSharedMappedBuffer::withOptions on stub task
+	static void *igSharedMappedBufferWithOptions(void *that, void *task,
+	    unsigned long size, unsigned int flags, unsigned int type);
+	mach_vm_address_t oigSharedMappedBufferWithOptions {};
+
 	
 	static unsigned long submitBlit(void *that, void *param_1, void *param_2, void *param_3, bool param_4);
 	mach_vm_address_t osubmitBlit {};
