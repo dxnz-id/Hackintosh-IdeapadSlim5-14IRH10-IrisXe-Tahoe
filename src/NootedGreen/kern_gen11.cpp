@@ -1913,6 +1913,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		 // V1000: bypass initAllocators failure on RPL so initWithOptions succeeds, letting
 		 // IAF2 proceed to createShared which populates IntelAccelerator+0x150 (stamp memory base).
 		 {"__ZN11IGAccelTask14initAllocatorsEP16IntelAccelerator", igAccelTaskInitAllocators, this->oigAccelTaskInitAllocators},
+		 // V1001: skip initStampAndScratchPages when acc+0x150 null (IAF2 fills it later).
+		 {"__ZN11IGAccelTask24initStampAndScratchPagesEv", igAccelTaskInitStampAndScratchPages, this->oigAccelTaskInitStampAndScratchPages},
 
 			 // V36: Hook readAndClearInterrupts to initialize Gen11 multi-engine GT interrupts.
 			 // Without this, RCS/BCS user interrupts and context-switch notifications may not
@@ -6911,6 +6913,28 @@ bool Gen11::igAccelTaskInitAllocators(void *that, void *accelerator)
 		return true;
 	}
 	return true;
+}
+
+// V1001: hook IGAccelTask::initStampAndScratchPages on RPL.
+// During IntelAccelerator::start, acc+0x150 (stamp memory base) is null because
+// IAF2 fills it only later via IOGraphicsAccelerator2::createShared. Without this
+// guard the function falls to the allocate-new-IGMappedBuffer path which calls
+// allocGPUVirtualAddress -> IAF2 dereferences acc+0x378 (null) -> CR2=0 panic.
+// IAF2 will call initStampAndScratchPages again after createShared when +0x150 is valid.
+bool Gen11::igAccelTaskInitStampAndScratchPages(void *that)
+{
+	if (NGreen::callback->isRealTGL)
+		return FunctionCast(igAccelTaskInitStampAndScratchPages, callback->oigAccelTaskInitStampAndScratchPages)(that);
+
+	// task+0x10 = IntelAccelerator*, acc+0x150 = stamp memory base
+	auto *acc = *reinterpret_cast<uint8_t **>(reinterpret_cast<uint8_t *>(that) + 0x10);
+	if (!acc) return false;
+	void *stampBase = *reinterpret_cast<void **>(acc + 0x150);
+	if (!stampBase || stampBase == that) {
+		SYSLOG("ngreen", "V1001: initStampAndScratchPages skip (acc+0x150 null), task=%p", that);
+		return true;  // defer; IAF2 retries after createShared fills acc+0x150
+	}
+	return FunctionCast(igAccelTaskInitStampAndScratchPages, callback->oigAccelTaskInitStampAndScratchPages)(that);
 }
 
 void * Gen11::getBlit3DContext(void *that,bool param_1)
