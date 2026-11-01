@@ -6948,17 +6948,25 @@ bool Gen11::igAccelTaskInitStampAndScratchPages(void *that)
 }
 
 
-// V1004: guard IGSharedMappedBuffer::withOptions against stub kernel task.
+// V1004: guard IGSharedMappedBuffer::withOptions against uninitialized task.
 // During IntelAccelerator::start, telemetryCreateManager->IGSupportMDAPI::
-// initializeOaBuffer calls withOptions(stub_task, ...) before createShared.
-// stub_task has task+0x280 null so allocGPUVirtualAddress crashes (CR2=0).
-// initializeOaBuffer checks for null return so returning nullptr is safe.
+// initializeOaBuffer calls withOptions(task) before the kernel task has had
+// initStampAndScratchPages run (task+0x280 = scratch GPU VA = null). This
+// causes allocGPUVirtualAddress to crash (CR2=0). The check is task+0x280 null
+// rather than pointer equality: igAccelStubTask is not yet set when this path
+// runs (IAF2 calls IntelAccelerator::start before IGAccelTask::withOptions).
+// initializeOaBuffer null-checks withOptions return (TGL+0x76568+0x90), safe.
 void * Gen11::igSharedMappedBufferWithOptions(void *that, void *task,
     unsigned long size, unsigned int flags, unsigned int type)
 {
-	if (!NGreen::callback->isRealTGL && task && task == callback->igAccelStubTask) {
-		SYSLOG("ngreen", "V1004: IGSharedMappedBuffer::withOptions blocked on stub task=%p", task);
-		return nullptr;
+	if (!NGreen::callback->isRealTGL && task) {
+		// task+0x280 = scratch GPU virtual address set by initStampAndScratchPages.
+		// If null the task is uninitialized; allocGPUVirtualAddress will crash.
+		void *scratchGPUVA = *reinterpret_cast<void **>(reinterpret_cast<uint8_t *>(task) + 0x280);
+		if (!scratchGPUVA) {
+			SYSLOG("ngreen", "V1004: withOptions blocked (task+0x280 null) task=%p", task);
+			return nullptr;
+		}
 	}
 	return FunctionCast(igSharedMappedBufferWithOptions, callback->oigSharedMappedBufferWithOptions)(that, task, size, flags, type);
 }
