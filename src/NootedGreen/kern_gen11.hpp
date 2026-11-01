@@ -1420,6 +1420,12 @@ private:
 	static void *igAccelTaskGetStamps(void *that);
 	mach_vm_address_t oigAccelTaskGetStamps {};
 
+	// V1006: guard IGMappedBuffer::getMemoryDescriptor against NULL buffer pointer.
+	// IntelAccelerator::getStampMemory tail-calls getMemoryDescriptor() on task+0x288.
+	// When task+0x288 is null on RPL, dereferencing 0x30(rdi) crashes (CR2=0x30) under WindowServer.
+	static void *igMappedBufferGetMemoryDescriptor(void *that);
+	mach_vm_address_t oigMappedBufferGetMemoryDescriptor {};
+
 	
 	static unsigned long submitBlit(void *that, void *param_1, void *param_2, void *param_3, bool param_4);
 	mach_vm_address_t osubmitBlit {};

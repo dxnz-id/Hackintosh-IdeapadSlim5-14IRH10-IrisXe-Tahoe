@@ -1923,6 +1923,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 		 // V1005: guard getStamps against NULL stamp buffer (task+0x288) when V1001 skips
 		 // initStampAndScratchPages. Prevents getVirtualAddress(NULL) crash (CR2=0x38).
 		 {"__ZNK11IGAccelTask9getStampsEv", igAccelTaskGetStamps, this->oigAccelTaskGetStamps},
+		 // V1006: guard getMemoryDescriptor against NULL IGMappedBuffer pointer (CR2=0x30 in WindowServer).
+		 {"__ZNK14IGMappedBuffer19getMemoryDescriptorEv", igMappedBufferGetMemoryDescriptor, this->oigMappedBufferGetMemoryDescriptor},
 
 			 // V36: Hook readAndClearInterrupts to initialize Gen11 multi-engine GT interrupts.
 			 // Without this, RCS/BCS user interrupts and context-switch notifications may not
@@ -6984,6 +6986,8 @@ void * Gen11::igSharedMappedBufferWithOptions(void *task,
 // the result to getVirtualAddress without checking for NULL -> CR2=0x38 panic.
 void * Gen11::igAccelTaskGetStamps(void *that)
 {
+	if (!that)
+		return nullptr;
 	if (!NGreen::callback->isRealTGL) {
 		void *stampBuf = *reinterpret_cast<void **>(reinterpret_cast<uint8_t *>(that) + 0x288);
 		if (!stampBuf) {
@@ -6992,6 +6996,28 @@ void * Gen11::igAccelTaskGetStamps(void *that)
 		}
 	}
 	return FunctionCast(igAccelTaskGetStamps, callback->oigAccelTaskGetStamps)(that);
+}
+
+
+// V1006: guard IGMappedBuffer::getMemoryDescriptor against NULL buffer or memory map.
+// In IOAccelDevice2::deviceStart(), IntelAccelerator::getStampMemory() is called.
+// On RPL, the stampBuffer (task+0x288) is NULL, and getStampMemory tail-calls
+// IGMappedBuffer::getMemoryDescriptor(NULL) -> dereferences 0x30(rdi) -> CR2=0x30 panic.
+void * Gen11::igMappedBufferGetMemoryDescriptor(void *that)
+{
+	if (!that) {
+		SYSLOG("ngreen", "V1006: getMemoryDescriptor called on null buffer");
+		return nullptr;
+	}
+	if (!NGreen::callback->isRealTGL) {
+		auto *m1 = *reinterpret_cast<uint8_t **>(reinterpret_cast<uint8_t *>(that) + 0x30);
+		if (!m1)
+			return nullptr;
+		auto *m2 = *reinterpret_cast<uint8_t **>(m1 + 0x18);
+		if (!m2)
+			return nullptr;
+	}
+	return FunctionCast(igMappedBufferGetMemoryDescriptor, callback->oigMappedBufferGetMemoryDescriptor)(that);
 }
 
 
