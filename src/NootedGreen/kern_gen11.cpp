@@ -875,18 +875,20 @@ static void xePageon(void *that, void *ev, bool b, uint64_t x) {
 	xePageSync(that, ev);
 }
 // 19/10: o mesmo pânico veio também de csbProcessPreempted (troca para "itens grandes"); os 3 tratadores que chamam
-// ContextStatusBufferValidate passam pelo mesmo teste. elSwitch: também exige o EL[1] (+0x38), que ele lê em seguida.
-static bool xeCsbEventoInvalido(void *that, const uint32_t *e, bool exigeEl1, uint32_t tag) {
+// ContextStatusBufferValidate passam pelo mesmo teste.
+// V1023: Removed broken exigeEl1 requirement. Disassembly of Apple's csbProcessElementSwitch confirms:
+//   3c682: testq %r13, %r13 (EL[1]) -> je 0x3c762 (handles EL[1] == NULL naturally by moving EL[0] to wait queue).
+// Requiring EL[1] discarded all valid element-switches on single-item queues (e.g. waiting on scanline), wedging CSB.
+static bool xeCsbEventoInvalido(void *that, const uint32_t *e, uint32_t tag) {
 	static int guard = -1;
 	if (guard < 0) guard = checkKernelArgument("-ngreennocsbguard") ? 0 : 1;
 	if (guard != 1 || !that || !e) return false;
 	auto *cs = static_cast<uint8_t *>(that);
 	uint32_t idx = *reinterpret_cast<uint32_t *>(cs + 0x50);
 	auto *el = *reinterpret_cast<uint8_t **>(cs + 0x30 + (uint64_t)idx * 16);
-	auto *el1 = *reinterpret_cast<uint8_t **>(cs + 0x38 + (uint64_t)idx * 16);
 	uint32_t id = (e[1] >> 5) & 0x7ff;
 	auto *ctx = el ? *reinterpret_cast<uint8_t **>(el) : nullptr;
-	if (!el || !ctx || *reinterpret_cast<uint32_t *>(ctx + 0x7c) != id || (exigeEl1 && !el1)) {
+	if (!el || !ctx || *reinterpret_cast<uint32_t *>(ctx + 0x7c) != id) {
 		xeEv(tag, idx, id, ++gCsbSkipN);
 		return true;
 	}
@@ -919,24 +921,18 @@ static bool xeCsbResync(void *that, const uint32_t *e) {
 	return true;
 }
 static void xeCsbA2I(void *that, const uint32_t *e) {
-	if (xeCsbEventoInvalido(that, e, false, 'CSBX')) {
+	if (xeCsbEventoInvalido(that, e, 'CSBX')) {
 		if (!xeCsbResync(that, e)) return;
-		if (xeCsbEventoInvalido(that, e, false, 'CSBY')) return;  // não deveria acontecer
+		if (xeCsbEventoInvalido(that, e, 'CSBY')) return;  // não deveria acontecer
 	}
 	FunctionCast(xeCsbA2I, gOrgCsbA2I)(that, e);
 }
 static void xeCsbPreempt(void *that, const uint32_t *e) {
-	if (xeCsbEventoInvalido(that, e, false, 'CSBP')) return;
+	if (xeCsbEventoInvalido(that, e, 'CSBP')) return;
 	FunctionCast(xeCsbPreempt, gOrgCsbPreempt)(that, e);
 }
 static void xeCsbElSwitch(void *that, const uint32_t *e) {
-	if (xeCsbEventoInvalido(that, e, true, 'CSBS')) {
-		// xe/elsw-idle (V1021): if el1 is null, hardware element switch was actually active->idle
-		// (e.g. waiting on scanline or semaphore). Route as active->idle so scheduler retires element 0.
-		if (that && e && gOrgCsbA2I)
-			xeCsbA2I(that, e);
-		return;
-	}
+	if (xeCsbEventoInvalido(that, e, 'CSBS')) return;
 	FunctionCast(xeCsbElSwitch, gOrgCsbElSwitch)(that, e);
 }
 static uint64_t xeEvalWait(void *that, const bool *thr, bool x, bool y) {
