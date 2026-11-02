@@ -930,7 +930,13 @@ static void xeCsbPreempt(void *that, const uint32_t *e) {
 	FunctionCast(xeCsbPreempt, gOrgCsbPreempt)(that, e);
 }
 static void xeCsbElSwitch(void *that, const uint32_t *e) {
-	if (xeCsbEventoInvalido(that, e, true, 'CSBS')) return;
+	if (xeCsbEventoInvalido(that, e, true, 'CSBS')) {
+		// xe/elsw-idle (V1021): if el1 is null, hardware element switch was actually active->idle
+		// (e.g. waiting on scanline or semaphore). Route as active->idle so scheduler retires element 0.
+		if (that && e && gOrgCsbA2I)
+			xeCsbA2I(that, e);
+		return;
+	}
 	FunctionCast(xeCsbElSwitch, gOrgCsbElSwitch)(that, e);
 }
 static uint64_t xeEvalWait(void *that, const bool *thr, bool x, bool y) {
@@ -3090,14 +3096,13 @@ bool Gen11::paramsSurfCompare(AppleIntel::AppleIntelBaseController *that,
 			ret = true;
 	}
 
-	// Real fix for seam scaler 2: Apple reads PIPE_SEAM_EXCESS and PS_PS_WIN_SZ from p2
+	// Real fix for seam scaler 2: Apple reads PIPE_SEAM_EXCESS from p2
 	// AFTER paramsSurfCompare returns, to fill the GPU DSB buffer entry for PS_WIN_SZ_2_A
-	// (0x68274). On a single-pipe ADL-P panel there is no seam scaler 2; if the DSB gets
-	// 0x3fff04f there, the pipeline aborts the flip immediately (param2=0 at V405).
-	// Zeroing here prevents any non-zero seam value from reaching the DSB.
+	// (0x68274). On a single-pipe ADL-P panel there is no seam scaler 2.
+	// Zeroing PIPE_SEAM_EXCESS prevents any non-zero seam value from reaching the DSB.
+	// NOTE: DO NOT zero PS_PS_WIN_SZ as it holds primary pipe scaler window size.
 	if (!NGreen::callback->isRealTGL && p2 != nullptr) {
 		p2->PIPE_SEAM_EXCESS = 0;
-		p2->PS_PS_WIN_SZ     = 0;
 	}
 
 	if (NGreen::callback == nullptr || NGreen::callback->isRealTGL) return ret;
@@ -3186,14 +3191,15 @@ void Gen11::setupParams(AppleIntel::AppleIntelBaseController *that,
 
 	if (NGreen::callback == nullptr || NGreen::callback->isRealTGL || params == nullptr) return;
 
-	// V403-zero: causation test. Wipe seam-join CRTCParams fields BEFORE any
+	// V403-zero: Wipe seam-join CRTCParams fields BEFORE any
 	// post-SetupParams consumer reads them (paramsSurfCompare, MMIO emit etc).
-	uint32_t pre_seam  = params->PIPE_SEAM_EXCESS;
-	uint32_t pre_winsz = params->PS_PS_WIN_SZ;
+	// NOTE (V1021): DO NOT zero PS_PS_WIN_SZ! Zeroing pipe scaler window collapses
+	// the primary display height to 0, causing the black screen with top-pixel artifact.
+	uint32_t pre_seam   = params->PIPE_SEAM_EXCESS;
+	uint32_t pre_winsz  = params->PS_PS_WIN_SZ;
 	uint32_t pre_hphase = params->PS_HPHASE;
-	if (pre_seam != 0 || pre_winsz != 0 || pre_hphase != 0) {
+	if (pre_seam != 0 || pre_hphase != 0) {
 		params->PIPE_SEAM_EXCESS = 0;
-		params->PS_PS_WIN_SZ     = 0;
 		params->PS_HPHASE        = 0;
 	}
 
@@ -3384,145 +3390,27 @@ void Gen11::configurePlane(AppleIntel::AppleIntelPlane *that, AppleIntel::FlipTr
 		return;
 	}
 
-	// Pre-call snapshot
-	uint32_t incomingTiling = 0;
-	if (flipArgs != nullptr)
-		incomingTiling = flipArgs->TilingEnum;
-
-	static int v406CallCount = 0;
-	static int v406LogCount = 0;
-	++v406CallCount;
-
-#ifdef V406_APPROACH_TILING_PATCH
-	// ===== APPROACH 1: PRE-CALL TILING PATCH =====
-	// Patch FlipTransactionArgs+0x3c before calling original
-	// Apple's configurePlane reads this, takes the corresponding disasm branch,
-	// builds PLANE_CTL with correct tiling bits natively
-	
-	uint32_t *tilingField = &flipArgs->TilingEnum;
-	const uint32_t savedTiling = *tilingField;
-	*tilingField = V406_TILING_VALUE;
-
-	if (v406LogCount < 20) {
-		++v406LogCount;
-		SYSLOG("ngreen", "V406[%d]: TILING_PATCH call#%d | "
-			   "Incoming tiling=0x%x → Patched=0x%x (%s)",
-			   v406LogCount, v406CallCount, incomingTiling, V406_TILING_VALUE,
-			   (V406_TILING_VALUE == 0) ? "X-tiled" :
-			   (V406_TILING_VALUE == 1) ? "Y-tiled" : "linear/else");
-	}
-
 	FunctionCast(configurePlane, callback->oConfigurePlane)(that, flipArgs);
 
-	*tilingField = savedTiling;   // restore
-
-#elif defined(V406_APPROACH_POST_SHADOW_PATCH)
-	// ===== APPROACH 2: POST-CALL SHADOW PATCH =====
-	// Call original, then modify AppleIntelPlane shadow fields directly
-	
-	FunctionCast(configurePlane, callback->oConfigurePlane)(that, flipArgs);
-
-	if (that != nullptr) {
-		// Patch PLANE_CTL shadow at +0x100 (or custom offset)
-		uint32_t &ctlShadow = getMember<uint32_t>(that, V406_CTL_SHADOW_OFFSET);
-		const uint32_t ctlBefore = ctlShadow;
-		
-		// Clear tiling bits if needed
-		if (V406_PLANE_CTL_CLEAR_MASK != 0)
-			ctlShadow &= ~V406_PLANE_CTL_CLEAR_MASK;
-		
-		// Set specific bits if needed
-		if (V406_PLANE_CTL_SET_MASK != 0)
-			ctlShadow |= V406_PLANE_CTL_SET_MASK;
-		
-		if (v406LogCount < 20) {
+	if (that != nullptr && !checkKernelArgument("-ngreenxtile")) {
+		// V1021: Post-call shadow patch.
+		// Disassembly of AppleIntelPlane confirms:
+		//   +0x100 is PLANE_CTL shadow
+		//   +0x118 is PLANE_STRIDE shadow (mmioAddr_PLANE_STRIDE_1A @ +0xB0)
+		uint32_t &ctlShadow = getMember<uint32_t>(that, 0x100);
+		ctlShadow &= ~(0x7u << 10); // clear bits[12:10] = 000 (linear)
+		uint32_t &strideShadow = getMember<uint32_t>(that, 0x118);
+		uint32_t targetStride = 0x78; // 120 (1920*4 / 64) for 1920x1200
+		uint32_t strideOv = 0;
+		if (PE_parse_boot_argn("ngreenstride", &strideOv, sizeof(strideOv)) && strideOv)
+			targetStride = strideOv;
+		strideShadow = targetStride;
+		static int v406LogCount = 0;
+		if (v406LogCount < 10) {
 			++v406LogCount;
-			SYSLOG("ngreen", "V406[%d]: POST_SHADOW_PATCH call#%d | "
-				   "PLANE_CTL shadow @+0x%x: 0x%x → 0x%x (clear=0x%x set=0x%x)",
-				   v406LogCount, v406CallCount, V406_CTL_SHADOW_OFFSET,
-				   ctlBefore, ctlShadow, V406_PLANE_CTL_CLEAR_MASK, V406_PLANE_CTL_SET_MASK);
+			SYSLOG("ngreen", "V406[%d]: configurePlane linear CTL=0x%x STRIDE=0x%x (shadow @+0x118)",
+				   v406LogCount, ctlShadow, strideShadow);
 		}
-
-		// Optionally patch STRIDE shadow
-		if (V406_STRIDE_FORCE_ENABLE) {
-			uint32_t &strideShadow = getMember<uint32_t>(that, V406_STRIDE_SHADOW_OFFSET);
-			const uint32_t strideBefore = strideShadow;
-			strideShadow = V406_STRIDE_VALUE;
-			if (v406LogCount < 20) {
-				SYSLOG("ngreen", "V406[%d]: STRIDE shadow @+0x%x: 0x%x → 0x%x",
-					   v406LogCount, V406_STRIDE_SHADOW_OFFSET, strideBefore, V406_STRIDE_VALUE);
-			}
-		}
-	}
-
-#elif defined(V406_APPROACH_STRIDE_DIVISOR)
-	// ===== APPROACH 3: STRIDE DIVISOR (experimental) =====
-	// Patch stride divisor used in configurePlane's pitch/divisor calculation
-	// WARNING: This requires knowing the exact location where stride divisor is stored
-	// (likely in a local stack variable or controller object). This is highly experimental.
-	
-	FunctionCast(configurePlane, callback->oConfigurePlane)(that, flipArgs);
-
-	if (v406LogCount < 20) {
-		++v406LogCount;
-		SYSLOG("ngreen", "V406[%d]: STRIDE_DIVISOR call#%d | "
-			   "Attempting stride divisor override (experimental) | "
-			   "Incoming tiling=0x%x",
-			   v406LogCount, v406CallCount, incomingTiling);
-	}
-
-	// NOTE: Actual stride divisor patching would require identifying the controller
-	// field or register that holds 0x200 (stride divisor for X-tiled).
-	// This approach is a placeholder—override if you find the divisor location.
-
-#elif defined(V406_APPROACH_DUAL_TILING_STRIDE)
-	// ===== APPROACH 4: DUAL TILING + STRIDE =====
-	// Combine pre-call tiling patch + post-call stride shadow patch
-	
-	uint32_t *tilingField = &flipArgs->TilingEnum;
-	const uint32_t savedTiling = *tilingField;
-	*tilingField = V406_TILING_VALUE;
-
-	FunctionCast(configurePlane, callback->oConfigurePlane)(that, flipArgs);
-
-	*tilingField = savedTiling;
-
-	// Post-call: patch STRIDE shadow
-	if (V406_STRIDE_FORCE_ENABLE && that != nullptr) {
-		uint32_t &strideShadow = getMember<uint32_t>(that, V406_STRIDE_SHADOW_OFFSET);
-		const uint32_t strideBefore = strideShadow;
-		strideShadow = V406_STRIDE_VALUE;
-		
-		if (v406LogCount < 20) {
-			++v406LogCount;
-			SYSLOG("ngreen", "V406[%d]: DUAL_TILING_STRIDE call#%d | "
-				   "Tiling=0x%x STRIDE shadow: 0x%x → 0x%x",
-				   v406LogCount, v406CallCount, V406_TILING_VALUE,
-				   strideBefore, V406_STRIDE_VALUE);
-		}
-	}
-
-#else
-	// ===== APPROACH 5: DIAGNOSTIC PASS-THROUGH =====
-	// No changes—pure logging to see original behavior
-	
-	FunctionCast(configurePlane, callback->oConfigurePlane)(that, flipArgs);
-
-	if (v406LogCount < 20) {
-		++v406LogCount;
-		SYSLOG("ngreen", "V406[%d]: DIAGNOSTIC_ONLY call#%d | "
-			   "Incoming tiling=0x%x (unchanged)",
-			   v406LogCount, v406CallCount, incomingTiling);
-	}
-#endif
-
-	// Always log final state if STRIDE monitoring enabled
-	if (V406_STRIDE_FORCE_ENABLE && that != nullptr && v406LogCount < 20) {
-		uint32_t ctlFinal = getMember<uint32_t>(that, V406_CTL_SHADOW_OFFSET);
-		uint32_t strideFinal = getMember<uint32_t>(that, V406_STRIDE_SHADOW_OFFSET);
-		SYSLOG("ngreen", "V406-final[%d]: CTL@+0x%x=0x%x STRIDE@+0x%x=0x%x",
-			   v406LogCount, V406_CTL_SHADOW_OFFSET, ctlFinal,
-			   V406_STRIDE_SHADOW_OFFSET, strideFinal);
 	}
 }
 
@@ -4161,8 +4049,8 @@ static uint32_t xeFixFilterWrite(unsigned long reg, uint32_t val) {
 				if (PE_parse_boot_argn("ngreenstride", &strideOv, sizeof(strideOv)) && strideOv) {
 					val = strideOv;
 				} else if ((val & 0x7FFu) <= 0x3Fu) {
-					// Apple writes pitch/512 (e.g. 15 for 1920); Display 13 linear requires pitch/64 (120) -> * 8
-					val = (val & ~0x7FFu) | ((val & 0x7FFu) * 8);
+					// Apple writes pitch/512 (15 for 1920); linear requires pitch/64 (120 = 0x78)
+					val = (val & ~0x7FFu) | 0x78;
 				}
 			}
 			return val;
@@ -4390,8 +4278,13 @@ void Gen11::raWriteRegister32(void *that,unsigned long param_1, UInt32 param_2)
 		// xe/stride: override no caminho MMIO (o que realmente chega ao hardware). A escrita na struct do plano não chega.
 		uint32_t strideOv = 0;
 		uint32_t strideIn = param_2;
-		if (PE_parse_boot_argn("ngreenstride", &strideOv, sizeof(strideOv)) && strideOv)
+		if (PE_parse_boot_argn("ngreenstride", &strideOv, sizeof(strideOv)) && strideOv) {
 			param_2 = strideOv;
+		} else if (!checkKernelArgument("-ngreenxtile") && (param_2 & 0x7FFu) <= 0x3Fu) {
+			// V1021: Apple writes pitch/512 (15 = 0x0F) for 1920-wide tiled.
+			// Under linear scanout, convert to pitch/64 (120 = 0x78).
+			param_2 = (param_2 & ~0x7FFu) | 0x78;
+		}
 		static int strideLogs = 0;
 		if (strideLogs++ < 20)
 			IOLog("XeNG STRIDE[%d] in=0x%x out=0x%x ov=0x%x\n", strideLogs, strideIn, param_2, strideOv);
@@ -4658,15 +4551,18 @@ void Gen11::raWriteRegister32(void *that,unsigned long param_1, UInt32 param_2)
 		// (V99R[P]+V99G handle the SURF redirect / GGTT remap unconditionally).
 		//
 		// Gated on !isRealTGL. Real TGL programs natively.
-		/* linear forces com STRIDE=0xa0 (2560 px) ficam desligados: o paramsSurfCompare já força linear com stride do modo real.
-		if (NGreen::callback && !NGreen::callback->isRealTGL) {
-			// force CTL linear and STRIDE=0xa0 (CPU compositor writes linearly via BAR2).
+		// V1021: Before SURF arm latches the double-buffer, enforce linear CTL and 120 stride (0x78) in hardware MMIO
+		if (NGreen::callback && !NGreen::callback->isRealTGL && !checkKernelArgument("-ngreenxtile")) {
+			uint32_t targetStride = 0x78;
+			uint32_t strideOv = 0;
+			if (PE_parse_boot_argn("ngreenstride", &strideOv, sizeof(strideOv)) && strideOv)
+				targetStride = strideOv;
 			uint32_t hwTiling = (hwCtl >> 10) & 0x7;
 			if (hwTiling != 0)
-				NGreen::callback->writeReg32(0x70180, hwCtl & ~(0x7u << 10));
-			if (hwStride != 0xa0)
-				NGreen::callback->writeReg32(0x70188, 0xa0);
-		}*/
+				NGreen::callback->writeReg32(0x70180, hwCtl & ~(0x7u << 10)); // bits[12:10] = 000 (linear)
+			if (hwStride != targetStride)
+				NGreen::callback->writeReg32(0x70188, targetStride);
+		}
 	}
 
 	if (reinterpret_cast<volatile uint64_t*>(that)==nullptr) return NGreen::callback->writeReg32(param_1,param_2);
