@@ -578,6 +578,12 @@ static uint64_t xeCs5Submit(void *that, uint32_t x) {
 	uint32_t n = ++gCs5SubmitN;
 	xeEv('EXEC', n, x, gS5PushN);
 	xeSameTail(that);
+	if (NGreen::callback) {
+		uint32_t cur = NGreen::callback->readReg32(0x2050);
+		if ((cur & 0x1080) != 0x1080) {
+			NGreen::callback->writeReg32(0x2050, (0x1080u << 16) | 0x1080u);
+		}
+	}
 	uint64_t r = FunctionCast(xeCs5Submit, gOrgCs5Submit)(that, x);
 	// xe/elsq (19/10): o que foi escrito na fila de submissão. Base do motor pelo tipo do CS (cs+0x28 -> byte 0: 0=RCS)
 	auto *c28 = *reinterpret_cast<uint8_t **>(static_cast<uint8_t *>(that) + 0x28);
@@ -637,7 +643,31 @@ static uint64_t xeRbComputeWriteStamp(void *that, uint32_t stamp, bool b) {
 		b = false;
 	return FunctionCast(xeRbComputeWriteStamp, gOrgRbComputeWriteStamp)(that, stamp, b);
 }
+static mach_vm_address_t gOrgRbWriteBuffer = 0;
+static void xeRbWriteBuffer(void *that, uint32_t *buf, uint32_t count) {
+	if (buf && count >= 2 && (buf[0] & 0xffff0000) == 0x7a000000) {
+		// PIPE_CONTROL with Post-Sync Write Immediate (bit 14: 0x4000)
+		if (buf[1] & 0x00004000) {
+			if (NGreen::callback && !NGreen::callback->getIsRealTGL() && !checkKernelArgument("-ngreenforcecsstall")) {
+				uint32_t oldDw1 = buf[1];
+				buf[1] &= ~0x00100100; // Clear bit 20 (CS Stall) and bit 8 (Pixel Scoreboard Stall)
+				static int logCount = 0;
+				if (logCount++ < 16) {
+					IOLog("XeNG: writeBuffer post-sync PIPE_CONTROL DW1 0x%08x -> 0x%08x (stamp %u)\n",
+					      oldDw1, buf[1], count >= 5 ? buf[4] : 0);
+				}
+			}
+		}
+	}
+	FunctionCast(xeRbWriteBuffer, gOrgRbWriteBuffer)(that, buf, count);
+}
 static uint64_t xeRbSubmit(void *that) {
+	if (NGreen::callback) {
+		uint32_t cur = NGreen::callback->readReg32(0x2050);
+		if ((cur & 0x1080) != 0x1080) {
+			NGreen::callback->writeReg32(0x2050, (0x1080u << 16) | 0x1080u);
+		}
+	}
 	auto *p = static_cast<uint8_t *>(that);
 	int idx = *reinterpret_cast<int *>(p + 0x38);
 	uint32_t tail = *reinterpret_cast<uint32_t *>(p + 0x64);
@@ -1059,14 +1089,21 @@ static uint64_t xeRestoreSafe(void *that) {
 	auto *img = reinterpret_cast<volatile uint32_t *>(reinterpret_cast<uint8_t *(*)(void *)>(gSmbGetVA)(smb));
 	if (!img) return r;
 	volatile uint32_t *pg1 = img + 0x400;
-	for (int k = 1; k + 1 < 0x100; k++) {
+	for (int k = 1; k + 1 < 0x200; k++) {
 		if (pg1[k] == 0x21b0) {
 			uint32_t antes = pg1[k + 1];
 			pg1[k + 1] = 0;
 			static volatile uint32_t n = 0;
 			if (++n <= 32) IOLog("XeNG POSH ctx lrca=%x POSH_LRCA %x -> 0 (DW%x)\n", *reinterpret_cast<uint32_t *>(ctx + 0x89) & ~0xfffu, antes, k + 1);
-			break;
+		} else if (pg1[k] == 0x2050) {
+			uint32_t oldv = pg1[k + 1];
+			pg1[k + 1] = ((oldv >> 16) | 0x1080u) << 16 | (oldv & 0xffff) | 0x1080u;
+			static volatile uint32_t n = 0;
+			if (++n <= 16) IOLog("XeNG PSMI: context pg1[0x%x]=0x2050 0x%x -> 0x%x\n", k, oldv, pg1[k + 1]);
 		}
+	}
+	if (NGreen::callback) {
+		NGreen::callback->writeReg32(0x2050, (0x1080u << 16) | 0x1080u);
 	}
 	return r;
 }
@@ -2105,6 +2142,7 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				{"__ZN12IGScheduler56resumeEv", xeS5Resume, gOrgS5Resume},
 			};
 			RouteRequestPlus ringDiag[] = {
+				{"__ZN20IGHardwareRingBuffer11writeBufferEPjj", xeRbWriteBuffer, gOrgRbWriteBuffer},
 				{"__ZN20IGHardwareRingBuffer12submitToRingEv", xeRbSubmit, gOrgRbSubmit},
 				{"__ZN20IGHardwareRingBuffer10writeStampEjb", xeRbWriteStamp, gOrgRbWriteStamp},
 				{"__ZN24IGHardwareRingBufferMain10writeStampEjb", xeRbMainWriteStamp, gOrgRbMainWriteStamp},
@@ -2525,6 +2563,27 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 					LookupPatchPlus const patchNoTcf2[] = {{activeKext, f_notcf2, r_notcf2, arrsize(f_notcf2), 2}};
 					bool okt2 = LookupPatchPlus::applyAll(patcher, patchNoTcf2, address, size);
 					IOLog("XeNG NOTCF2: commitStampCommand sem Tile Cache Flush: %s\n", okt2 ? "aplicado" : "NAO encontrado");
+				}
+				// xe/nocsstall (V1020): DW1 bit 20 (CS Stall, 0x00100000) in commitStampCommand's post-sync PIPE_CONTROL
+				// causes RCS Command Streamer to hang indefinitely waiting for non-existent DSS/EUs on 48 EU
+				// chips (i5-13420H / RPL-H GT1) where INSTDONE reports DSS 3, 4, 5 not done.
+				// In 0x011044987a000004 (movabsq rax, ... at 0x4e500 and 0x84ea4), clearing bit 20 (0x10 -> 0x00):
+				static const uint8_t f_nocsstall[] = {0x48, 0xb8, 0x04, 0x00, 0x00, 0x7a, 0x98, 0x44, 0x10, 0x01};
+				static const uint8_t r_nocsstall[] = {0x48, 0xb8, 0x04, 0x00, 0x00, 0x7a, 0x98, 0x44, 0x00, 0x01};
+				if (!checkKernelArgument("-ngreenforcecsstall")) {
+					LookupPatchPlus const patchNoCsStall[] = {{activeKext, f_nocsstall, r_nocsstall, arrsize(f_nocsstall), 2}};
+					bool okcs = LookupPatchPlus::applyAll(patcher, patchNoCsStall, address, size);
+					IOLog("XeNG NOCSSTALL: commitStampCommand sem CS Stall: %s\n", okcs ? "aplicado" : "NAO encontrado");
+				}
+				// xe/psmi (V1020): Wa_1607297627 in IntelAccelerator::startGraphicsEngine() (0x2589e).
+				// Apple skips writing 0x10801080 to 0x2050 if WA bit 43 is not set in chip mask (RPL GT1 lacks it).
+				// Bypass "jae" (73 21 -> 90 90) so 0x2050 always gets bits 12|7 (RC_SEMA_IDLE_MSG_DISABLE | WAIT_FOR_EVENT_POWER_DOWN_DISABLE).
+				static const uint8_t f_psmi[] = {0x48, 0x0f, 0xba, 0xe1, 0x2b, 0x73, 0x21, 0x81, 0x88, 0x50, 0x20, 0x00, 0x00, 0x80, 0x10, 0x80, 0x10};
+				static const uint8_t r_psmi[] = {0x48, 0x0f, 0xba, 0xe1, 0x2b, 0x90, 0x90, 0x81, 0x88, 0x50, 0x20, 0x00, 0x00, 0x80, 0x10, 0x80, 0x10};
+				if (xeFixEnabled()) {
+					LookupPatchPlus const patchPsmi[] = {{activeKext, f_psmi, r_psmi, arrsize(f_psmi), 1}};
+					bool okpsmi = LookupPatchPlus::applyAll(patcher, patchPsmi, address, size);
+					IOLog("XeNG PSMI: startGraphicsEngine Wa_1607297627 0x2050: %s\n", okpsmi ? "aplicado" : "NAO encontrado");
 				}
 				// xe/blit16 (19/10): o hang do contexto Blit3D (usado pelo pipe de display) continua com o flush limpo: a
 				// Apple diz EUs/WMFE/PSS "not done" -> o PS do blit3d em SIMD32 (IGBlit3DKernel_default_simd32, KSP1=0x540)
