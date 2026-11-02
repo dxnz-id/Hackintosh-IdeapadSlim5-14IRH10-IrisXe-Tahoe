@@ -638,6 +638,47 @@ static uint64_t xeRbSemPoll(void *that, uint32_t value, int widx) {
 	return r;
 }
 
+// V1017: Bypass hardware semaphore wait instructions (0x0e009002 on BCS, 0x7a000004 on RCS).
+// On spoofed RPL hardware, cross-engine hardware semaphores deadlock because the signal
+// is never seen across engines while the other engine is idle/disabled.
+// Cross-engine synchronization is already safely handled by xePageSync on CPU.
+static mach_vm_address_t gOrgRbBaseWaitSem = 0;
+static mach_vm_address_t gOrgRbBlitWaitSem = 0;
+static mach_vm_address_t gOrgRbMainWaitSem = 0;
+static mach_vm_address_t gOrgRbComputeWaitSem = 0;
+
+static void xeRbBaseWaitSem(void *that, uint32_t stamp, uint32_t waitIndex) {
+	if (!checkKernelArgument("-ngreenorigsem")) {
+		xeEv('SEMW', 1, waitIndex, stamp);
+		return;
+	}
+	FunctionCast(xeRbBaseWaitSem, gOrgRbBaseWaitSem)(that, stamp, waitIndex);
+}
+
+static void xeRbBlitWaitSem(void *that, uint32_t stamp, uint32_t waitIndex) {
+	if (!checkKernelArgument("-ngreenorigsem")) {
+		xeEv('SEMW', 32, waitIndex, stamp);
+		return;
+	}
+	FunctionCast(xeRbBlitWaitSem, gOrgRbBlitWaitSem)(that, stamp, waitIndex);
+}
+
+static void xeRbMainWaitSem(void *that, uint32_t stamp, uint32_t waitIndex) {
+	if (!checkKernelArgument("-ngreenorigsem")) {
+		xeEv('SEMW', 8, waitIndex, stamp);
+		return;
+	}
+	FunctionCast(xeRbMainWaitSem, gOrgRbMainWaitSem)(that, stamp, waitIndex);
+}
+
+static void xeRbComputeWaitSem(void *that, uint32_t stamp, uint32_t waitIndex) {
+	if (!checkKernelArgument("-ngreenorigsem")) {
+		xeEv('SEMW', 16, waitIndex, stamp);
+		return;
+	}
+	FunctionCast(xeRbComputeWaitSem, gOrgRbComputeWaitSem)(that, stamp, waitIndex);
+}
+
 // xe/csbdiag (19/10): cada entrada do CSB processada pelo escalonador 5: palavras brutas (lo/hi), o tipo que o driver
 // deduz (saída de processCSBDetail) e o estado das portas da execlist antes do tratador.
 static mach_vm_address_t gOrgCsbDetail = 0;
@@ -2051,6 +2092,10 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 				{"__ZN20IGHardwareRingBuffer12submitToRingEv", xeRbSubmit, gOrgRbSubmit},
 				{"__ZN20IGHardwareRingBuffer10writeStampEjb", xeRbWriteStamp, gOrgRbWriteStamp},
 				{"__ZN20IGHardwareRingBuffer23insertSemaphoreWaitPollEji", xeRbSemPoll, gOrgRbSemPoll},
+				{"__ZN20IGHardwareRingBuffer16waitForSemaphoreEjj", xeRbBaseWaitSem, gOrgRbBaseWaitSem},
+				{"__ZN24IGHardwareRingBufferBlit16waitForSemaphoreEjj", xeRbBlitWaitSem, gOrgRbBlitWaitSem},
+				{"__ZN24IGHardwareRingBufferMain16waitForSemaphoreEjj", xeRbMainWaitSem, gOrgRbMainWaitSem},
+				{"__ZN27IGHardwareRingBufferCompute16waitForSemaphoreEjj", xeRbComputeWaitSem, gOrgRbComputeWaitSem},
 				{"__ZN26IGHardwareCommandStreamer516processCSBDetailEP28SGfxContextStatusBufferEntryRj", xeCsbDetail, gOrgCsbDetail},
 				{"__ZN26IGHardwareCommandStreamer522csbProcessActiveToIdleEPK28SGfxContextStatusBufferEntry", xeCsbA2I, gOrgCsbA2I},
 				{"__ZN15IGAccelResource7pageoffEP12IOAccelEventbPby", xePageoff, gOrgPageoff},
