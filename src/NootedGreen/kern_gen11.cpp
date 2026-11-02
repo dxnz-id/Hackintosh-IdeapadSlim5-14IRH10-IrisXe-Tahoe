@@ -12591,8 +12591,24 @@ static void xeBlitFixNote(void *acc) {
 // Called from the patched block (rdi = blit3d_params_t*, rsi = sum of rect w*h, rdx = IntelAccelerator*).
 // true -> blt2d_source_copy, false -> Blit3D. Must stay cheap: runs for every large non-fast copy.
 static bool xeBlitFixRoute(const uint8_t *p, uint64_t px, void *acc) {
-	const uint32_t bpp = p[0xa0];
+	const uint32_t bpp = p ? p[0xa0] : 4;
 	const uint64_t bytes = px * bpp;
+
+	// V1024: On non-real TGL (RPL spoofed GT2, especially 48 EU), Blit3D compiles/executes
+	// EU shaders targeting 96 EU / 6 DSS topology. On 48 EU / 3 DSS hardware,
+	// shader threads on missing DSS never retire, leaving Index 9 hung (Submitted 1, Returned 0)
+	// and deadlocking RCS wait queues. Divert ALL large non-fast copies to 2D (BCS / blt2d_source_copy).
+	if (!checkKernelArgument("-ngreenforceblit3d")) {
+		if ((NGreen::callback && !NGreen::callback->getIsRealTGL()) || checkKernelArgument("-ngreenno3dblit")) {
+			uint32_t n = OSIncrementAtomic(&gBfBase) + 1;
+			if (n <= 8) {
+				IOLog("XeNG BLITFIX #%u: divert large copy (bytes %llu) -> 2D (Bypass Blit3D on RPL/Iris Xe)\n", n, bytes);
+			}
+			if (!(n & (n - 1))) xeBlitFixNote(acc);
+			return true;
+		}
+	}
+
 	if (bytes < (bpp == 16 ? 0x51001ULL : 0x20001ULL)) return true;     // original 0x2c228..0x2c25f
 	const uint32_t sb = *reinterpret_cast<const uint32_t *>(p) + *reinterpret_cast<const uint32_t *>(p + 0x2c);
 	const uint32_t db = *reinterpret_cast<const uint32_t *>(p + 0x48) + *reinterpret_cast<const uint32_t *>(p + 0x74);
