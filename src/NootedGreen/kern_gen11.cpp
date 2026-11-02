@@ -614,12 +614,28 @@ static uint64_t xeS5Resume(void *that) {
 }
 
 // xe/ringdiag (19/10): por índice de stamp, cada submitToRing (anel -> hardware) e o último writeStamp emitido.
-static mach_vm_address_t gOrgRbSubmit = 0, gOrgRbWriteStamp = 0, gOrgRbSemPoll = 0;
+static mach_vm_address_t gOrgRbSubmit = 0, gOrgRbWriteStamp = 0, gOrgRbMainWriteStamp = 0, gOrgRbComputeWriteStamp = 0, gOrgRbSemPoll = 0;
 static volatile uint32_t gRbCount[64], gRbLastStamp[64];
 static uint64_t xeRbWriteStamp(void *that, uint32_t stamp, bool b) {
 	int idx = *reinterpret_cast<int *>(static_cast<uint8_t *>(that) + 0x38);
 	if (idx >= 0 && idx < 64) gRbLastStamp[idx] = stamp;
+	if (NGreen::callback && !NGreen::callback->getIsRealTGL() && !checkKernelArgument("-ngreenforcecsstall"))
+		b = false;
 	return FunctionCast(xeRbWriteStamp, gOrgRbWriteStamp)(that, stamp, b);
+}
+static uint64_t xeRbMainWriteStamp(void *that, uint32_t stamp, bool b) {
+	int idx = *reinterpret_cast<int *>(static_cast<uint8_t *>(that) + 0x38);
+	if (idx >= 0 && idx < 64) gRbLastStamp[idx] = stamp;
+	if (NGreen::callback && !NGreen::callback->getIsRealTGL() && !checkKernelArgument("-ngreenforcecsstall"))
+		b = false;
+	return FunctionCast(xeRbMainWriteStamp, gOrgRbMainWriteStamp)(that, stamp, b);
+}
+static uint64_t xeRbComputeWriteStamp(void *that, uint32_t stamp, bool b) {
+	int idx = *reinterpret_cast<int *>(static_cast<uint8_t *>(that) + 0x38);
+	if (idx >= 0 && idx < 64) gRbLastStamp[idx] = stamp;
+	if (NGreen::callback && !NGreen::callback->getIsRealTGL() && !checkKernelArgument("-ngreenforcecsstall"))
+		b = false;
+	return FunctionCast(xeRbComputeWriteStamp, gOrgRbComputeWriteStamp)(that, stamp, b);
 }
 static uint64_t xeRbSubmit(void *that) {
 	auto *p = static_cast<uint8_t *>(that);
@@ -2091,6 +2107,8 @@ bool Gen11::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t 
 			RouteRequestPlus ringDiag[] = {
 				{"__ZN20IGHardwareRingBuffer12submitToRingEv", xeRbSubmit, gOrgRbSubmit},
 				{"__ZN20IGHardwareRingBuffer10writeStampEjb", xeRbWriteStamp, gOrgRbWriteStamp},
+				{"__ZN24IGHardwareRingBufferMain10writeStampEjb", xeRbMainWriteStamp, gOrgRbMainWriteStamp},
+				{"__ZN27IGHardwareRingBufferCompute10writeStampEjb", xeRbComputeWriteStamp, gOrgRbComputeWriteStamp},
 				{"__ZN20IGHardwareRingBuffer23insertSemaphoreWaitPollEji", xeRbSemPoll, gOrgRbSemPoll},
 				{"__ZN20IGHardwareRingBuffer16waitForSemaphoreEjj", xeRbBaseWaitSem, gOrgRbBaseWaitSem},
 				{"__ZN24IGHardwareRingBufferBlit16waitForSemaphoreEjj", xeRbBlitWaitSem, gOrgRbBlitWaitSem},
@@ -2985,7 +3003,7 @@ bool Gen11::paramsSurfCompare(AppleIntel::AppleIntelBaseController *that,
 	uint32_t nat_stride_pl2 = pl2 ? pl2->PLANE_STRIDE : 0;
 	uint32_t nat_surf_pl2   = pl2 ? pl2->PLANE_SURF   : 0;
 
-	if (!NGreen::callback->isRealTGL && pl2 && !xeFixEnabled()) {
+	if (!NGreen::callback->isRealTGL && pl2) {
 		// xe/xtile (-ngreenxtile): keep Apple's native X-tiled PLANE_CTL (V401 logs: bits[12:10]=001)
 		// and use the X-tile stride (pitch / 512 B). 2560 px -> 0x14, 3840 px -> 0x1e.
 		uint32_t srcW = p2 ? (((p2->PIPE_SRCSZ >> 16) & 0xFFFF) + 1) : 0;
@@ -2993,9 +3011,8 @@ bool Gen11::paramsSurfCompare(AppleIntel::AppleIntelBaseController *that,
 			pl2->PLANE_STRIDE = (srcW >= 640 && srcW <= 8192) ? (srcW * 4 / 512) : 0x14;
 		} else {
 			pl2->PLANE_CTL    = (pl2->PLANE_CTL & ~(0x7u << 10));  // bits[12:10] = 000 → linear
-			// xe/nooted: linear stride (64-byte units) from the real pipe width; the original
-			// hardcoded 0xa0 only fits a 2560-px-wide panel (3840 px needs 0xf0).
-			pl2->PLANE_STRIDE = (srcW >= 640 && srcW <= 8192) ? (srcW * 4 / 64) : 0xa0;
+			// xe/nooted: linear stride (64-byte units) from the real pipe width;
+			pl2->PLANE_STRIDE = (srcW >= 640 && srcW <= 8192) ? (srcW * 4 / 64) : 0x78;
 			// xe/stride (-ngreenstride=N): sobrescreve o stride linear, para medir o efeito na largura das bandas.
 			uint32_t strideOv = 0;
 			if (PE_parse_boot_argn("ngreenstride", &strideOv, sizeof(strideOv)) && strideOv)
@@ -3274,9 +3291,9 @@ void Gen11::configureColorPipeLine(AppleIntel::AppleIntelPlane *that, AppleIntel
 // === TILING ENUM SELECTOR (active for approaches using pre-call patch) ===
 // ============================================================================
 
-// #define V406_TILING_VALUE 2       // linear — CPU BAR2 compositor path
+#define V406_TILING_VALUE 2          // linear — matches CPU BAR2 / linear compositor path
 // #define V406_TILING_VALUE 1       // Y-tiled
-#define V406_TILING_VALUE 0          // X-tiled — matches Apple IOSurface allocator
+// #define V406_TILING_VALUE 0       // X-tiled
 
 // ============================================================================
 // === STRIDE FORCE (active for stride-manipulation approaches) ===
@@ -4074,6 +4091,22 @@ static uint32_t xeFixFilterWrite(unsigned long reg, uint32_t val) {
 		// GAMMA_MODE_A: o driver TGL liga gamma pós-CSC de 10 bits com tabela no formato errado para o
 		// display 13 -> texto/cores degradados. Provado ao vivo (17/10 20h): com 0 (bypass) a imagem fica certa.
 		case 0x4A480: return 0;
+		case 0x70180: // PLANE_CTL Pipe A Plane 1
+			if (!checkKernelArgument("-ngreenxtile")) {
+				val &= ~(0x7u << 10); // clear bits[12:10] -> linear
+			}
+			return val;
+		case 0x70188: // PLANE_STRIDE Pipe A Plane 1
+			if (!checkKernelArgument("-ngreenxtile")) {
+				uint32_t strideOv = 0;
+				if (PE_parse_boot_argn("ngreenstride", &strideOv, sizeof(strideOv)) && strideOv) {
+					val = strideOv;
+				} else if ((val & 0x7FFu) <= 0x3Fu) {
+					// Apple writes pitch/512 (e.g. 15 for 1920); Display 13 linear requires pitch/64 (120) -> * 8
+					val = (val & ~0x7FFu) | ((val & 0x7FFu) * 8);
+				}
+			}
+			return val;
 	}
 	return val;
 }
