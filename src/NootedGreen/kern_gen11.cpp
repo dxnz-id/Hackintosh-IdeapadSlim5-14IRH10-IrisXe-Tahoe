@@ -3999,7 +3999,7 @@ static uint32_t xeBootHold(unsigned long reg, uint32_t val) {
 		return val;
 	}
 	if (r != 0x70180 && r != 0x7019C) return val;
-	if (gXeBhOn < 0) gXeBhOn = checkKernelArgument("-xenobb") ? 0 : 1;
+	if (gXeBhOn < 0) gXeBhOn = (checkKernelArgument("-xenobb") || checkKernelArgument("-ngreennobb")) ? 0 : 1;
 	if (!gXeBhOn || !NGreen::callback) { gXeBhDone = 1; return val; }
 	if (r == 0x70180) {
 		if (!(val & 0x80000000u)) return val;
@@ -4897,7 +4897,7 @@ void Gen11::hwInitializeCState(AppleIntel::AppleIntelBaseController *that)
 		// On a different panel they replace the firmware-trained native mode (here 3840x2400, 4 lanes
 		// HBR3) and the panel goes black; Apple's FB then keeps them for the online boot display.
 		// -ngreenkeepefi: keep what UEFI/GOP programmed when transcoder A is already running.
-		const bool keepEfiTiming = checkKernelArgument("-ngreenkeepefi") &&
+		const bool keepEfiTiming = checkKernelArgument("-ngreenkeepefi") ||
 			(NGreen::callback->readReg32(0x70008) & 0x80000000u);
 		if (keepEfiTiming) {
 			SYSLOG("ngreen", "keepefi: TRANS_DDI_FUNC_CTL_A=0x%x HTOTAL=0x%x VTOTAL=0x%x PP_CONTROL=0x%x kept",
